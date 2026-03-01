@@ -1,5 +1,6 @@
 """CLI for managing the Discovery Zero hypergraph."""
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +10,7 @@ from discovery_zero.models import HyperGraph, Module
 from discovery_zero.persistence import save_graph, load_graph, DEFAULT_GRAPH_PATH
 from discovery_zero.inference import propagate_beliefs
 from discovery_zero.strategy import rank_nodes, suggest_module
+from discovery_zero.ingest import ingest_skill_output
 
 app = typer.Typer(help="Discovery Zero: reasoning hypergraph manager")
 
@@ -117,6 +119,19 @@ def next_action(
             f"-> use {module.value}\n"
             f"    {node.statement[:70]}"
         )
+
+
+@app.command()
+def ingest(
+    json_str: str = typer.Argument(..., help="JSON string of skill output"),
+    path: Path = typer.Option(DEFAULT_GRAPH_PATH, help="Graph file path"),
+):
+    """Ingest a skill output (JSON) into the hypergraph."""
+    g = load_graph(path)
+    output = json.loads(json_str)
+    edge = ingest_skill_output(g, output)
+    save_graph(g, path)
+    typer.echo(f"Ingested edge {edge.id} ({edge.module.value}, conf={edge.confidence:.2f})")
 
 
 if __name__ == "__main__":
