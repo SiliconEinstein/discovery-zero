@@ -7,6 +7,8 @@ import typer
 
 from discovery_zero.models import HyperGraph, Module
 from discovery_zero.persistence import save_graph, load_graph, DEFAULT_GRAPH_PATH
+from discovery_zero.inference import propagate_beliefs
+from discovery_zero.strategy import rank_nodes, suggest_module
 
 app = typer.Typer(help="Discovery Zero: reasoning hypergraph manager")
 
@@ -80,6 +82,41 @@ def show(
             concl_stmt = g.nodes[edge.conclusion_id].statement[:30]
             typer.echo(f"  [{eid}] {premise_stmts} -> {concl_stmt} "
                        f"({edge.module.value}, conf={edge.confidence:.2f})")
+
+
+@app.command()
+def propagate(
+    path: Path = typer.Option(DEFAULT_GRAPH_PATH, help="Graph file path"),
+):
+    """Run belief propagation on the hypergraph."""
+    g = load_graph(path)
+    iterations = propagate_beliefs(g)
+    save_graph(g, path)
+    typer.echo(f"Belief propagation converged in {iterations} iterations")
+    for nid, node in g.nodes.items():
+        typer.echo(f"  [{nid}] belief={node.belief:.4f} {node.statement[:50]}")
+
+
+@app.command(name="next")
+def next_action(
+    path: Path = typer.Option(DEFAULT_GRAPH_PATH, help="Graph file path"),
+    top_n: int = typer.Option(5, help="Number of suggestions to show"),
+):
+    """Suggest the next exploration action based on value-uncertainty trade-off."""
+    g = load_graph(path)
+    ranked = rank_nodes(g)
+    if not ranked:
+        typer.echo("No nodes to explore. Add conjectures or run plausible reasoning.")
+        return
+    typer.echo("--- Suggested next actions ---")
+    for nid, priority in ranked[:top_n]:
+        node = g.nodes[nid]
+        module = suggest_module(g, nid)
+        typer.echo(
+            f"  [{nid}] priority={priority:.2f} belief={node.belief:.2f} "
+            f"-> use {module.value}\n"
+            f"    {node.statement[:70]}"
+        )
 
 
 if __name__ == "__main__":
