@@ -17,8 +17,8 @@ You will receive:
 
 1. **Formalize the statement** in Lean 4 syntax if not already provided.
 2. **Plan the proof.** Think about which Mathlib lemmas you might need.
-3. **Write the Lean proof** in a `.lean` file.
-4. **Run `lake build`** to verify the proof compiles.
+3. **Write the Lean proof** in a `.lean` file (in the workspace or as a temp file).
+4. **Verify the proof** using either the Python API or `lake build`.
 5. **If it fails**, read the error, fix the proof, and try again. Iterate up to 5 times.
 6. **If it succeeds**, extract the theorem statement.
 
@@ -72,14 +72,64 @@ On failure after 5 attempts, produce:
 - **Prefer short, tactic-based proofs** over term-mode proofs.
 - **Check that the Lean statement actually matches the intended conjecture.**
 
-## Prerequisites
+## Workspace and Verification
 
-A Lean 4 project must be set up in the workspace with Mathlib as a dependency. If not present, create one:
+Discovery Zero provides a Lean workspace at `lean_workspace/` and a Python API for verification.
+
+### Option 1: CLI (recommended when iterating)
 
 ```bash
-lake new lean_workspace math
+# Ensure workspace exists
+dz lean init
+
+# Write your proof to a file (e.g. my_proof.lean), then verify:
+dz lean verify --file my_proof.lean
+```
+
+### Option 2: Python API (for programmatic use)
+
+```python
+from discovery_zero.lean import (
+    ensure_workspace,
+    verify_proof,
+    get_workspace_path,
+)
+
+# Ensure workspace is ready
+ensure_workspace()
+
+# Verify proof (writes to Proofs.lean and runs lake build)
+lean_code = """
+import Mathlib
+theorem discovery_midline_trivial : True := trivial
+"""
+result = verify_proof(lean_code)
+if result.success:
+    print(result.formal_statement)
+    ingest_dict = result.to_ingest_dict(
+        premises=[{"id": "n1", "statement": "axiom"}],
+        conclusion_statement="True",
+        steps=[lean_code],
+        domain="geometry",
+    )
+else:
+    print(result.error_message)
+```
+
+### Option 3: Manual lake build
+
+```bash
 cd lean_workspace
-echo 'require mathlib from git "https://github.com/leanprover-community/mathlib4"' >> lakefile.lean
+# First-time setup:
 lake update
+lake exe cache get   # Optional: fetch precompiled Mathlib
+lake build
+
+# After editing Discovery/Proofs.lean:
 lake build
 ```
+
+## Prerequisites
+
+- **Lean 4 toolchain** (elan + lake). Install: https://lean-lang.org/lean4/doc/setup.html
+- The workspace is created automatically by `dz lean init`. It uses Mathlib as a dependency.
