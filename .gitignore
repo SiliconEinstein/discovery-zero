@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -7,3 +8,21 @@ build/
 .venv/
 *.db
 .DS_Store
+
+# Local env files
+.env
+.env.local
+
+# Lean 4 build artifacts (keep source files tracked)
+lean_workspace/.lake/
+lean_workspace/**/*.olean
+
+# Benchmark/workspace runtime outputs (preserve showcase)
+evaluate/workspaces/runs/*
+!evaluate/workspaces/runs/homochirality_showcase/
+evaluate/workspaces/reports/
+evaluate/workspaces/nl_math_demo/
+evaluate/workspaces/*.log
+
+# Temporary case configs
+evaluate/cases/_tmp_alt_model/
