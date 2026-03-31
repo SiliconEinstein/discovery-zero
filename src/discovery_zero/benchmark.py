@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import signal
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -891,6 +892,75 @@ def summarize_run(
     }
 
 
+def _generate_partial_summary(
+    *,
+    case: BenchmarkCaseConfig,
+    run_dir: Path,
+    graph_path: Path,
+    log_path: Path,
+    bridge_path: Path,
+    repeat_index: int,
+    reason: str,
+    error: Exception | None = None,
+) -> dict[str, Any]:
+    """Generate a best-effort summary even when the run crashes or is terminated."""
+    try:
+        summary = summarize_run(
+            case=case,
+            run_dir=run_dir,
+            graph_path=graph_path,
+            log_path=log_path,
+            bridge_path=bridge_path,
+            repeat_index=repeat_index,
+        )
+    except Exception as exc:
+        graph = HyperGraph()
+        if graph_path.exists():
+            try:
+                graph = load_graph(graph_path)
+            except Exception:
+                graph = HyperGraph()
+        log_data: dict[str, Any] = {}
+        if log_path.exists():
+            try:
+                log_data = _read_json(log_path)
+            except Exception:
+                log_data = {}
+        theorem_id = str((log_data.get("node_ids") or {}).get("theorem") or "")
+        theorem = graph.nodes.get(theorem_id) if theorem_id else None
+        summary = {
+            "case_id": case.case_id,
+            "display_name": case.display_name,
+            "benchmark_scope": case.benchmark_scope,
+            "repeat_index": repeat_index,
+            "run_dir": str(run_dir),
+            "log_path": str(log_path),
+            "graph_path": str(graph_path),
+            "bridge_plan_path": str(bridge_path) if bridge_path.exists() else None,
+            "final_target_state": theorem.state if theorem else "unverified",
+            "final_target_belief": round(float(theorem.belief), 6) if theorem else 0.0,
+            "success": False,
+            "progress_without_closure": False,
+            "strict_lean_success": False,
+            "strict_lean_skipped_by_policy": False,
+            "lean_decompose_skipped_by_policy": False,
+            "first_failure_stage": "engine_crash",
+            "first_failure_message": str(exc),
+            "benchmark_outcome": "engine_crash",
+            "current_bottleneck": "engine_crash",
+            "current_bottleneck_detail": f"Failed to summarize run: {exc}",
+            "metrics": {},
+        }
+
+    if reason != "completed":
+        summary["success"] = False
+        summary["benchmark_outcome"] = reason
+    summary["partial_summary_reason"] = reason
+    if error is not None:
+        summary["partial_summary_error"] = str(error)
+    return summary
+
+
 def _write_scorecard_markdown(summary: dict[str, Any], path: Path) -> None:
     blocker = summary["current_bottleneck"]
     blocker_detail = summary.get("current_bottleneck_detail")
@@ -1024,6 +1094,9 @@ def _run_case_once_mcts(
 
     planning_feedback = _build_case_planning_feedback(case)
     theorem_id: str | None = None
+    run_reason = "completed"
+    run_error: Exception | None = None
+    mcts_result: Any | None = None
 
     try:
         graph = HyperGraph()
@@ -1070,23 +1143,25 @@ def _run_case_once_mcts(
             fallback_verifier=continuation_verifier,
         ) if prm_model else None
 
-        # Build ProcessAdvantageVerifier; load checkpoint when pav_enabled + pav_model_path.
-        _pav_model_path = None
-        if CONFIG.pav_enabled and CONFIG.pav_model_path:
-            from pathlib import Path as _Path
-            _candidate = _Path(CONFIG.pav_model_path)
-            if _candidate.exists():
-                _pav_model_path = _candidate
-            else:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "pav_model_path %s does not exist; PAV starts untrained.", _candidate
-                )
-        pav = ProcessAdvantageVerifier(
-            model_path=_pav_model_path,
-            external_prm=external_prm,
-            blend_ratio=1.0 if external_prm is not None else 0.0,
-        )
+        # Build ProcessAdvantageVerifier only when explicitly enabled.
+        pav = None
+        if CONFIG.pav_enabled:
+            _pav_model_path = None
+            if CONFIG.pav_model_path:
+                from pathlib import Path as _Path
+                _candidate = _Path(CONFIG.pav_model_path)
+                if _candidate.exists():
+                    _pav_model_path = _candidate
+                else:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "pav_model_path %s does not exist; PAV starts untrained.", _candidate
+                    )
+            pav = ProcessAdvantageVerifier(
+                model_path=_pav_model_path,
+                external_prm=external_prm,
+                blend_ratio=1.0 if external_prm is not None else 0.0,
+            )
         novelty_tracker = NoveltyTracker()
         curiosity = CuriosityDrivenExplorer(
             novelty_tracker=novelty_tracker,
@@ -1203,33 +1278,98 @@ def _run_case_once_mcts(
             log["metadata"]["last_flush_at"] = _utc_now().isoformat()
             _save_json(log_path, log)
 
-        mcts_result = engine.run(
-            planning_feedback=planning_feedback or "",
-            boundary_policy=boundary_policy,
-            on_iteration_complete=_flush_iteration,
-        )
+        class _RunTerminated(RuntimeError):
+            pass
+
+        sigterm_received = {"flag": False}
+        previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        previous_sighup_handler = signal.getsignal(signal.SIGHUP) if hasattr(signal, "SIGHUP") else None
+
+        def _handle_sigterm(_signum: int, _frame: Any) -> None:
+            sigterm_received["flag"] = True
+            raise _RunTerminated(f"Received signal {_signum} during MCTS run")
+
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, _handle_sigterm)
+        try:
+            try:
+                mcts_result = engine.run(
+                    planning_feedback=planning_feedback or "",
+                    boundary_policy=boundary_policy,
+                    on_iteration_complete=_flush_iteration,
+                )
+            except _RunTerminated as exc:
+                run_reason = "terminated"
+                run_error = exc
+                log["steps"].append(
+                    {
+                        "phase": "engine_termination",
+                        "error": str(exc),
+                    }
+                )
+                log["metadata"]["terminated_at"] = _utc_now().isoformat()
+                _save_json(log_path, log)
+            except Exception as exc:
+                run_reason = "engine_crash"
+                run_error = exc
+                log["steps"].append(
+                    {
+                        "phase": "engine_crash",
+                        "error": str(exc),
+                    }
+                )
+                log["metadata"]["crashed_at"] = _utc_now().isoformat()
+                _save_json(log_path, log)
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+            if hasattr(signal, "SIGHUP") and previous_sighup_handler is not None:
+                signal.signal(signal.SIGHUP, previous_sighup_handler)
+
         # Flush any remaining steps not captured by the last callback.
-        remaining_steps = mcts_result.steps[_flushed_steps:]
-        if remaining_steps:
-            log["steps"].extend(remaining_steps)
+        if mcts_result is not None:
+            remaining_steps = mcts_result.steps[_flushed_steps:]
+            if remaining_steps:
+                log["steps"].extend(remaining_steps)
         graph = load_graph(graph_path)
         log["snapshots"].append(_snapshot(graph, "after_mcts"))
         log["metadata"]["finished_at"] = _utc_now().isoformat()
         _save_json(log_path, log)
+    except Exception as exc:
+        run_reason = "engine_crash"
+        run_error = exc
+        log["steps"].append(
+            {
+                "phase": "run_case_mcts_error",
+                "error": str(exc),
+            }
+        )
+        log["metadata"]["crashed_at"] = _utc_now().isoformat()
+        _save_json(log_path, log)
     finally:
-        if proofs_path is not None and backup is not None:
-            proofs_path.write_text(backup, encoding="utf-8")
+        try:
+            if proofs_path is not None and backup is not None:
+                proofs_path.write_text(backup, encoding="utf-8")
+        except Exception as restore_exc:
+            logger.warning("Failed to restore proofs file: %s", restore_exc)
+        try:
+            summary = _generate_partial_summary(
+                case=case,
+                run_dir=run_dir,
+                graph_path=graph_path,
+                log_path=log_path,
+                bridge_path=bridge_path,
+                repeat_index=repeat_index,
+                reason=run_reason,
+                error=run_error,
+            )
+            _save_json(summary_path, summary)
+            _write_scorecard_markdown(summary, scorecard_path)
+        except Exception as summary_exc:
+            logger.error("Failed to generate summary: %s", summary_exc, exc_info=True)
+            summary = {"error": str(summary_exc), "reason": run_reason}
+            _save_json(summary_path, summary)
 
-    summary = summarize_run(
-        case=case,
-        run_dir=run_dir,
-        graph_path=graph_path,
-        log_path=log_path,
-        bridge_path=bridge_path,
-        repeat_index=repeat_index,
-    )
-    _save_json(summary_path, summary)
-    _write_scorecard_markdown(summary, scorecard_path)
     return summary
 
 
@@ -2049,46 +2189,47 @@ def aggregate_suite_results(
     suite_run_dir: Path,
     actual_repeats: int,
 ) -> dict[str, Any]:
-    total_runs = sum(item["run_count"] for item in case_results)
-    success_runs = sum(round(item["success_rate"] * item["run_count"]) for item in case_results)
-    strict_runs = sum(round(item["strict_lean_success_rate"] * item["run_count"]) for item in case_results)
-    localized_runs = sum(round(item["first_failure_is_localized_rate"] * item["run_count"]) for item in case_results)
-    progress_runs = sum(round(item["progress_without_closure_rate"] * item["run_count"]) for item in case_results)
-    strict_attempt_runs = sum(round(item["strict_lean_attempt_rate"] * item["run_count"]) for item in case_results)
-    decompose_attempt_runs = sum(round(item["lean_decompose_attempt_rate"] * item["run_count"]) for item in case_results)
-    replan_runs = sum(round(item["replan_triggered_rate"] * item["run_count"]) for item in case_results)
-    counterexample_runs = sum(round(item["counterexample_rate"] * item["run_count"]) for item in case_results)
-    bridge_plan_valid_runs = sum(round(item["bridge_plan_valid_rate"] * item["run_count"]) for item in case_results)
-    bridge_consumption_ready_runs = sum(round(item["bridge_consumption_ready_rate"] * item["run_count"]) for item in case_results)
-    bridge_experiment_attempt_runs = sum(round(item["bridge_experiment_attempt_rate"] * item["run_count"]) for item in case_results)
-    bridge_experiment_success_runs = sum(round(item["bridge_experiment_success_rate"] * item["run_count"]) for item in case_results)
-    theorem_correction_success_runs = sum(round(item["theorem_correction_success_rate"] * item["run_count"]) for item in case_results)
-    counterexample_warning_runs = sum(round(item["counterexample_warning_rate"] * item["run_count"]) for item in case_results)
-    high_pqi_runs = sum(round(item["high_pqi_rate"] * item["run_count"]) for item in case_results)
-    formalization_ready_runs = sum(round(item["formalization_ready_rate"] * item["run_count"]) for item in case_results)
-    strong_experiment_support_runs = sum(round(item["strong_experiment_support_rate"] * item["run_count"]) for item in case_results)
+    valid_results = [item for item in case_results if "run_count" in item]
+    total_runs = sum(item["run_count"] for item in valid_results)
+    success_runs = sum(round(item["success_rate"] * item["run_count"]) for item in valid_results)
+    strict_runs = sum(round(item["strict_lean_success_rate"] * item["run_count"]) for item in valid_results)
+    localized_runs = sum(round(item["first_failure_is_localized_rate"] * item["run_count"]) for item in valid_results)
+    progress_runs = sum(round(item["progress_without_closure_rate"] * item["run_count"]) for item in valid_results)
+    strict_attempt_runs = sum(round(item["strict_lean_attempt_rate"] * item["run_count"]) for item in valid_results)
+    decompose_attempt_runs = sum(round(item["lean_decompose_attempt_rate"] * item["run_count"]) for item in valid_results)
+    replan_runs = sum(round(item["replan_triggered_rate"] * item["run_count"]) for item in valid_results)
+    counterexample_runs = sum(round(item["counterexample_rate"] * item["run_count"]) for item in valid_results)
+    bridge_plan_valid_runs = sum(round(item["bridge_plan_valid_rate"] * item["run_count"]) for item in valid_results)
+    bridge_consumption_ready_runs = sum(round(item["bridge_consumption_ready_rate"] * item["run_count"]) for item in valid_results)
+    bridge_experiment_attempt_runs = sum(round(item["bridge_experiment_attempt_rate"] * item["run_count"]) for item in valid_results)
+    bridge_experiment_success_runs = sum(round(item["bridge_experiment_success_rate"] * item["run_count"]) for item in valid_results)
+    theorem_correction_success_runs = sum(round(item["theorem_correction_success_rate"] * item["run_count"]) for item in valid_results)
+    counterexample_warning_runs = sum(round(item["counterexample_warning_rate"] * item["run_count"]) for item in valid_results)
+    high_pqi_runs = sum(round(item["high_pqi_rate"] * item["run_count"]) for item in valid_results)
+    formalization_ready_runs = sum(round(item["formalization_ready_rate"] * item["run_count"]) for item in valid_results)
+    strong_experiment_support_runs = sum(round(item["strong_experiment_support_rate"] * item["run_count"]) for item in valid_results)
     mean_final_target_belief = _safe_mean(
         [
             float(run["final_target_belief"])
-            for item in case_results
-            for run in item["runs"]
+            for item in valid_results
+            for run in item.get("runs", [])
         ]
     )
 
     failure_counts = Counter()
     blocker_counts = Counter()
     outcome_counts = Counter()
-    for item in case_results:
-        failure_counts.update(item["first_failure_stage_counts"])
-        blocker_counts.update(item["current_bottleneck_counts"])
-        outcome_counts.update(item["benchmark_outcome_counts"])
+    for item in valid_results:
+        failure_counts.update(item.get("first_failure_stage_counts", {}))
+        blocker_counts.update(item.get("current_bottleneck_counts", {}))
+        outcome_counts.update(item.get("benchmark_outcome_counts", {}))
 
     overall_metric_vectors: dict[str, list[float]] = {}
     for metric_key in ("PQI", "FRI", "ESI", "ODB", "DBI", "ORI", "NVI", "OFC"):
         overall_metric_vectors[metric_key] = []
-        for item in case_results:
+        for item in valid_results:
             overall_metric_vectors[metric_key].extend(
-                float(run["metrics"].get(metric_key, 0)) for run in item["runs"]
+                float(run["metrics"].get(metric_key, 0)) for run in item.get("runs", [])
             )
 
     return {
@@ -2252,6 +2393,7 @@ def run_suite(
                     Implies resume=True.
     """
     import concurrent.futures as _futures
+    import signal as _signal
     import threading as _threading
 
     if resume_dir is not None:
@@ -2290,6 +2432,20 @@ def run_suite(
     repeats = int(repeats_override or suite.repeats)
     _results_lock = _threading.Lock()
     case_results: list[dict[str, Any]] = []
+    default_case_timeout_seconds = int(
+        max(300.0, float(getattr(CONFIG, "mcts_max_time_seconds", 0.0) or 0.0) * 1.5)
+    )
+
+    def _mark_case_completed(case_id: str) -> None:
+        with _results_lock:
+            completed_case_ids.add(case_id)
+            try:
+                progress_path.write_text(
+                    json.dumps({"completed": sorted(completed_case_ids)}, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
 
     def _run_one_case(case: BenchmarkCaseConfig) -> dict[str, Any]:
         case_repeats = int(case.repeats or repeats)
@@ -2330,17 +2486,31 @@ def run_suite(
         agg = aggregate_case_runs(case, run_summaries)
 
         # Update progress
-        with _results_lock:
-            completed_case_ids.add(case.case_id)
-            try:
-                progress_path.write_text(
-                    json.dumps({"completed": sorted(completed_case_ids)}, indent=2),
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
+        _mark_case_completed(case.case_id)
 
         return agg
+
+    def _run_one_case_with_timeout(case: BenchmarkCaseConfig) -> dict[str, Any]:
+        timeout_seconds = default_case_timeout_seconds
+        if timeout_seconds <= 0:
+            return _run_one_case(case)
+        if _threading.current_thread() is not _threading.main_thread():
+            # signal-based timeout only works on main thread; fall back to normal call.
+            return _run_one_case(case)
+
+        def _raise_timeout(_signum: int, _frame: Any) -> None:
+            raise TimeoutError(
+                f"Case '{case.case_id}' timed out after {timeout_seconds}s."
+            )
+
+        previous_handler = _signal.getsignal(_signal.SIGALRM)
+        try:
+            _signal.signal(_signal.SIGALRM, _raise_timeout)
+            _signal.alarm(timeout_seconds)
+            return _run_one_case(case)
+        finally:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, previous_handler)
 
     if max_parallel > 1:
         with _futures.ThreadPoolExecutor(max_workers=max_parallel) as pool:
@@ -2372,7 +2542,26 @@ def run_suite(
                 if found_summaries:
                     case_results.append(aggregate_case_runs(case, found_summaries))
                     continue
-            case_results.append(_run_one_case(case))
+            try:
+                case_results.append(_run_one_case_with_timeout(case))
+            except TimeoutError as exc:
+                _mark_case_completed(case.case_id)
+                case_results.append(
+                    {
+                        "case_id": case.case_id,
+                        "error": str(exc),
+                        "status": "timeout",
+                    }
+                )
+            except Exception as exc:
+                _mark_case_completed(case.case_id)
+                case_results.append(
+                    {
+                        "case_id": case.case_id,
+                        "error": str(exc),
+                        "status": "error",
+                    }
+                )
 
     suite_summary = aggregate_suite_results(
         suite=suite,

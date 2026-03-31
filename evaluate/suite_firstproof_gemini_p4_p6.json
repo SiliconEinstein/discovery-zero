@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6_gemini",
+  "display_name": "FirstProof P4 + P6 (Gemini-3-Pro)",
+  "description": "用 Gemini-3-Pro 求解 FirstProof P4 和 P6。",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4_gemini/case.json",
+    "cases/firstproof_p6_gemini/case.json"
+  ]
+}

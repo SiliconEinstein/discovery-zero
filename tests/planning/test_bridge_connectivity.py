@@ -214,7 +214,9 @@ def test_ingest_verified_claim_target_node_id_skips_text_search():
     )
     # Must have updated the existing node, not created a new one.
     assert returned_id == existing.id
-    assert graph.nodes[existing.id].belief >= 0.85
+    # BP purity: ingest only modifies prior, not belief directly.
+    # Belief updates happen when BP propagation runs subsequently.
+    assert graph.nodes[existing.id].prior >= 0.85
     # No new node should have been created.
     assert len(graph.nodes) == 1
 

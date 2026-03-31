@@ -116,7 +116,7 @@ class FactorGraph:
       - Variable nodes: binary propositions with a prior belief π ∈ (eps, 1-eps)
       - Factor nodes: reasoning operators encoding the joint constraint
 
-    All five operator types from §7.3 are supported. The graph never deletes
+    All seven operator types from §7.3 are supported. The graph never deletes
     variables or factors once added (immutability per reasoning-hypergraph.md §8).
 
     String IDs are used throughout (no int-to-str mapping needed).
@@ -165,7 +165,7 @@ class FactorGraph:
         factor_id:
             Unique string identifier for this factor.
         factor_type:
-            One of the five FactorType values.
+            One of the seven FactorType values.
         premises:
             Variable IDs that are the joint antecedents.
         conclusions:

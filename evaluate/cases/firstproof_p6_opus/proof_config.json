@@ -1,0 +1,73 @@
+{
+  "model": "cds/Claude-4.6-opus",
+  "domain": "spectral graph theory / linear algebra",
+  "lean_workspace": null,
+  "lean_boundary_policy": null,
+  "seed_policy": "frontier_assisted",
+  "seed_nodes": [
+    {
+      "key": "laplacian_def",
+      "statement": "For a graph G = (V, E) with n vertices, the Laplacian matrix L is the n x n positive semidefinite matrix L = D - A, where D is the diagonal degree matrix and A is the adjacency matrix. Equivalently, for any vector x in R^n, x^T L x = sum_{(i,j) in E} (x_i - x_j)^2.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "spectral graph theory"
+    },
+    {
+      "key": "induced_subgraph_laplacian",
+      "statement": "For a subset S of vertices of G = (V, E), define G_S = (V, E(S,S)) to be the graph on the same vertex set V but retaining only edges with both endpoints in S. Its Laplacian L_S satisfies x^T L_S x = sum_{(i,j) in E, i in S, j in S} (x_i - x_j)^2.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "spectral graph theory"
+    },
+    {
+      "key": "epsilon_light_def",
+      "statement": "A set S of vertices is epsilon-light if the matrix epsilon * L - L_S is positive semidefinite, i.e., for all x in R^n, sum_{(i,j) in E(S,S)} (x_i - x_j)^2 <= epsilon * sum_{(i,j) in E} (x_i - x_j)^2. Intuitively, the edges within S carry at most an epsilon fraction of the total quadratic form energy.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "spectral graph theory"
+    },
+    {
+      "key": "psd_loewner_order",
+      "statement": "For symmetric matrices A and B, we write A >= B (in the Loewner/PSD order) if A - B is positive semidefinite. This defines a partial order on symmetric matrices. Key property: if A >= B >= 0, then for any matrix C, C^T A C >= C^T B C.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "linear algebra"
+    },
+    {
+      "key": "probabilistic_method",
+      "statement": "The probabilistic method (Erdős): To prove that an object with a desired property exists, construct a random object and show that it has the desired property with positive probability. In particular, if a random subset S has E[|S|] >= k and always satisfies a property P, then there exists a specific S with |S| >= k satisfying P.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "combinatorics"
+    },
+    {
+      "key": "random_sampling_psd",
+      "statement": "Matrix Chernoff bound (Tropp, 2012): Let X_1, ..., X_n be independent random positive semidefinite matrices with 0 <= X_i <= R * I. Let mu_min = lambda_min(sum E[X_i]). Then P[lambda_min(sum X_i) <= (1-delta) mu_min] <= n * exp(-delta^2 mu_min / (2R)) for 0 < delta < 1.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "random matrix theory"
+    },
+    {
+      "key": "spectral_sparsification",
+      "statement": "Spielman-Srivastava (2011): Every graph on n vertices has an (1+epsilon)-spectral sparsifier with O(n/epsilon^2) edges. A spectral sparsifier H of G satisfies (1-epsilon) x^T L_G x <= x^T L_H x <= (1+epsilon) x^T L_H x for all x. This is related to selecting subsets of edges that approximately preserve the Laplacian quadratic form.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "spectral graph theory"
+    }
+  ],
+  "target": {
+    "key": "firstproof_p6",
+    "statement": "For a graph G = (V, E) with Laplacian L, and for a subset S of V, let L_S be the Laplacian of G_S = (V, E(S,S)) (edges with both endpoints in S). S is epsilon-light if epsilon*L - L_S is PSD. Prove there exists an absolute constant c > 0 such that for every graph G and every epsilon in (0,1), V contains an epsilon-light subset S of size at least c * epsilon * |V|.",
+    "belief": 0.1,
+    "state": "unverified",
+    "domain": "spectral graph theory / linear algebra"
+  },
+  "planning_constraints": [
+    "The key challenge is to find a LARGE epsilon-light set, of size proportional to epsilon * |V|.",
+    "A random subset where each vertex is included independently with probability p may be a natural starting point.",
+    "For a random subset S with inclusion probability p, E[L_S] involves terms where both endpoints are in S, so E[L_S] = p^2 * L (since each edge survives with probability p^2).",
+    "The condition epsilon*L - L_S >= 0 needs to hold almost surely or with high probability, not just in expectation.",
+    "Computational experiments on specific graph families (complete graphs, cycles, expanders, trees) should be used to calibrate constants.",
+    "The Loewner order condition is stronger than a scalar trace condition; matrix concentration may be needed."
+  ]
+}

@@ -121,9 +121,6 @@ class ZeroConfig:
     # Incremental BP: only re-propagate subgraph affected by changed edges
     bp_incremental: bool = _env_bool("DISCOVERY_ZERO_BP_INCREMENTAL", True)
 
-    # Neural BP correction strength (0 = off, 1 = full correction)
-    bp_neural_correction_strength: float = _env_float("DISCOVERY_ZERO_BP_NEURAL_CORRECTION", 0.0)
-
     # ------------------------------------------------------------------ #
     # Search Engine                                                       #
     # ------------------------------------------------------------------ #
@@ -212,9 +209,12 @@ class ZeroConfig:
 
     # New iterative discovery stack
     enable_mcts: bool = _env_bool("DISCOVERY_ZERO_ENABLE_MCTS", False)
-    enable_evolutionary_experiments: bool = _env_bool("DISCOVERY_ZERO_ENABLE_EVOLUTIONARY_EXPERIMENTS", False)
-    enable_continuation_verification: bool = _env_bool("DISCOVERY_ZERO_ENABLE_CONTINUATION_VERIFICATION", False)
-    enable_retrieval: bool = _env_bool("DISCOVERY_ZERO_ENABLE_RETRIEVAL", False)
+    enable_evolutionary_experiments: bool = _env_bool("DISCOVERY_ZERO_ENABLE_EVOLUTIONARY_EXPERIMENTS", True)
+    enable_continuation_verification: bool = _env_bool("DISCOVERY_ZERO_ENABLE_CONTINUATION_VERIFICATION", True)
+    enable_retrieval: bool = _env_bool(
+        "DISCOVERY_ZERO_ENABLE_RETRIEVAL",
+        bool(_env("EMBEDDING_API_BASE")),
+    )
     enable_problem_variants: bool = _env_bool("DISCOVERY_ZERO_ENABLE_PROBLEM_VARIANTS", False)
     enable_analogy: bool = _env_bool("DISCOVERY_ZERO_ENABLE_ANALOGY", True)
     enable_specialize: bool = _env_bool("DISCOVERY_ZERO_ENABLE_SPECIALIZE", True)

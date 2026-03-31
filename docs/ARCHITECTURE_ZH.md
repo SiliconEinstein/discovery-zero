@@ -537,6 +537,38 @@ evaluate/
 - `adapter_v2.py` 重写：多前提边正确分解为 CONJUNCTION → SOFT_IMPLICATION 两步 factor
 - `CONTRADICTION` / `EQUIVALENCE` 正确生成 `relation_var`
 
+### 2026-03-31 工业级加固（Industrial Hardening）
+
+**BP 纯度 & Gaia 理论合规**
+- `propagate_verification_signals` 简化为纯 BP 触发器，不再直接修改 `node.prior`/`node.belief`
+- `ingest.py` 中软证据（实验结果）只修改 `node.prior`，`belief` 由 BP 计算
+- 分解边（decomposition edges）纳入 BP，作为 `SOFT_IMPLICATION` factor 传播证据
+- Gaia BP 理论 docstring 修正（`CONJUNCTION`/`SOFT_IMPLICATION` 参数语义）
+
+**MCTS 鲁棒性**
+- 迭代内 `try/except` 异常安全：action 失败不丢失图状态，自动 `continue` 下一轮
+- 超时解耦：`post_action_budget_seconds` 保证 ingest+BP 优先于 bridge/verification
+- target 节点隔离检测：连续 3 轮无入边时强制对根目标执行 PLAUSIBLE
+- Action checkpoint 持久化到 `action_checkpoints/iter_XXXX_action_result.json`
+
+**LLM 请求优化**
+- `_StreamingTextRecorder` 追踪实际文本字节而非 SSE 原始字节，修复 thinking token 导致的过早截断
+- 移除人为 LLM 输出限制（word limit prompt、`max_prose_bytes` 硬上限、auto-continue 字节上限）
+- Bridge extraction 对 Opus 模型自动降级到 GPT-5.2（结构化 JSON 提取更可靠）
+
+**Benchmark 鲁棒性**
+- `SIGTERM` + `SIGHUP` 双信号处理，支持 `screen -X quit` 优雅终止
+- 信号 handler 正确保存/恢复（不再强制 `SIG_DFL`）
+- `_generate_partial_summary` 移入 outermost `finally`，保证崩溃/终止场景下必定生成 `summary.json`
+- proofs 文件恢复与 summary 生成互相独立，不会互相阻塞
+
+**监控工具**
+- `monitor_runs.py` 修复 target belief 显示：通过 `resolved_proof_config.json` 精确匹配目标节点
+- 三级 fallback：graph.json 语句匹配 → snapshot 语句匹配 → 最低 belief 未验证节点
+
+**死代码清理**
+- 移除空的 `MODEL_WORD_LIMITS` 字典和未被调用的 `_resolve_model_word_limit` 函数
+
 ### 残余局限
 
 **局限1：实验代码浮点精度误报**

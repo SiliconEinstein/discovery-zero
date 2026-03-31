@@ -91,7 +91,7 @@ def get_llm_config(
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    timeout: Optional[int] = None,
 ) -> LLMConfig:
     """Build LLMConfig from arguments or environment variables."""
     _load_local_env_file()
@@ -106,11 +106,18 @@ def get_llm_config(
         raise LLMError(f"Missing {ENV_API_BASE}.")
     if not resolved_key:
         raise LLMError(f"Missing {ENV_API_KEY}.")
+    resolved_timeout = timeout
+    if resolved_timeout is None:
+        try:
+            from discovery_zero.config import CONFIG as _cfg
+            resolved_timeout = int(getattr(_cfg, "llm_timeout", DEFAULT_TIMEOUT_SECONDS))
+        except Exception:
+            resolved_timeout = DEFAULT_TIMEOUT_SECONDS
     return LLMConfig(
         api_base=resolved_base.rstrip("/"),
         api_key=resolved_key,
         model=resolved_model,
-        timeout=timeout,
+        timeout=int(resolved_timeout),
     )
 
 
@@ -153,10 +160,16 @@ class _StreamingTextRecorder:
         self.path.write_text("", encoding="utf-8")
         self._buffer = ""
         self._saw_sse = False
+        self._content_bytes = 0
 
     @property
     def saw_sse(self) -> bool:
         return self._saw_sse
+
+    @property
+    def content_bytes(self) -> int:
+        """Bytes of actual assistant text content (excluding SSE framing, thinking, etc.)."""
+        return self._content_bytes
 
     def feed(self, raw_chunk: str) -> None:
         self._buffer += raw_chunk
@@ -199,8 +212,10 @@ class _StreamingTextRecorder:
                 if text:
                     parts.append(text)
         if parts:
+            text = "".join(parts)
+            self._content_bytes += len(text.encode("utf-8"))
             with self.path.open("a", encoding="utf-8") as fh:
-                fh.write("".join(parts))
+                fh.write(text)
 
 
 def _aggregate_streamed_chat_response(
@@ -326,7 +341,7 @@ def chat_completion(
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     temperature: float = 0.0,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    timeout: Optional[int] = None,
     *,
     response_format: Optional[Dict[str, Any]] = None,
     n: int = 1,
@@ -336,6 +351,7 @@ def chat_completion(
     node_id: str = "",
     stream: Optional[bool] = None,
     stream_record_path: Optional[Path] = None,
+    max_prose_bytes: int = 0,
 ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     """
     Run a chat completion against the configured LiteLLM proxy.
@@ -357,6 +373,8 @@ def chat_completion(
         stream_record_path: Optional file path to record generated assistant
             text while streaming. When provided, the file is updated during
             generation and overwritten with the final assistant text on success.
+        max_prose_bytes: Maximum streamed response bytes to collect before
+            truncating the stream defensively.
 
     Returns:
         A single response dict when n=1, or list[dict] when n>1.
@@ -367,6 +385,7 @@ def chat_completion(
         model=model,
         timeout=timeout,
     )
+    request_timeout = float(config.timeout)
     t = transport or get_default_transport()
 
     try:
@@ -406,6 +425,21 @@ def chat_completion(
     else:
         should_stream = bool(stream) and n == 1
 
+    def _empty_graceful_response() -> Dict[str, Any]:
+        if stream_record_path is not None:
+            stream_record_path.parent.mkdir(parents=True, exist_ok=True)
+            stream_record_path.write_text("", encoding="utf-8")
+        return _make_single_text_response(
+            "",
+            {
+                "id": f"graceful-empty-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": config.model,
+                "usage": {},
+            },
+        )
+
     try:
         if should_stream:
             recorder = _StreamingTextRecorder(stream_record_path) if stream_record_path else None
@@ -418,12 +452,19 @@ def chat_completion(
             for chunk in t.post_stream(
                 url,
                 stream_payload,
-                timeout=float(timeout),
+                timeout=request_timeout,
                 headers={**_auth_headers(config.api_key), "Accept": "text/event-stream"},
             ):
                 chunks.append(chunk)
                 if recorder is not None:
                     recorder.feed(chunk)
+                    if max_prose_bytes > 0 and recorder.content_bytes > max_prose_bytes:
+                        logger.warning(
+                            "Streaming content exceeded max_prose_bytes=%d (content_bytes=%d); truncating.",
+                            max_prose_bytes,
+                            recorder.content_bytes,
+                        )
+                        break
             if recorder is not None:
                 recorder.finalize()
             response = _aggregate_streamed_chat_response(chunks, model=config.model)
@@ -433,7 +474,7 @@ def chat_completion(
             response = t.post_json(
                 url,
                 payload,
-                timeout=float(timeout),
+                timeout=request_timeout,
                 headers=_auth_headers(config.api_key),
             )
             if stream_record_path is not None:
@@ -449,7 +490,7 @@ def chat_completion(
                 response = t.post_json(
                     url,
                     payload,
-                    timeout=float(timeout),
+                    timeout=request_timeout,
                     headers=_auth_headers(config.api_key),
                 )
                 if stream_record_path is not None:
@@ -458,8 +499,15 @@ def chat_completion(
                         extract_text_content(response),
                         encoding="utf-8",
                     )
-            except TransportError as fallback_exc:
-                raise LLMError(f"LLM request failed: {fallback_exc}") from fallback_exc
+            except Exception as fallback_exc:
+                if response_format is None:
+                    logger.warning(
+                        "Streaming fallback failed: %s; returning empty text for graceful degradation",
+                        fallback_exc,
+                    )
+                    response = _empty_graceful_response()
+                else:
+                    raise LLMError(f"LLM request failed: {fallback_exc}") from fallback_exc
         else:
             raise LLMError(f"LLM request failed: {exc}") from exc
     except LLMError as exc:
@@ -469,7 +517,7 @@ def chat_completion(
                 response = t.post_json(
                     url,
                     payload,
-                    timeout=float(timeout),
+                    timeout=request_timeout,
                     headers=_auth_headers(config.api_key),
                 )
                 if stream_record_path is not None:
@@ -478,8 +526,15 @@ def chat_completion(
                         extract_text_content(response),
                         encoding="utf-8",
                     )
-            except TransportError as fallback_exc:
-                raise LLMError(f"LLM request failed: {fallback_exc}") from fallback_exc
+            except Exception as fallback_exc:
+                if response_format is None:
+                    logger.warning(
+                        "Streaming parse fallback failed: %s; returning empty text for graceful degradation",
+                        fallback_exc,
+                    )
+                    response = _empty_graceful_response()
+                else:
+                    raise LLMError(f"LLM request failed: {fallback_exc}") from fallback_exc
         else:
             raise
 
@@ -514,11 +569,15 @@ def chat_completion(
             try:
                 response = t.post_json(
                     url, cont_payload,
-                    timeout=float(timeout),
+                    timeout=request_timeout,
                     headers=_auth_headers(config.api_key),
                 )
-            except TransportError as exc:
-                logger.warning("Auto-continue request failed: %s", exc)
+            except Exception as exc:
+                logger.warning(
+                    "Auto-continue round %d failed: %s; returning accumulated text",
+                    continuation_round,
+                    exc,
+                )
                 break
             chunk_text = extract_text_content(response)
             accumulated_text += chunk_text

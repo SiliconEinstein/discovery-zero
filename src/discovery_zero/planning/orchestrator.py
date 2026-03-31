@@ -94,6 +94,7 @@ EXPERIMENT_BRIDGE_GRADES = frozenset({"C"})
 NATURAL_LANGUAGE_BRIDGE_GRADES = frozenset({"D"})
 LEAN_BRIDGE_ROLES = frozenset({"bridge", "derived", "target"})
 STRICT_LOCAL_BRIDGE_ROLES = frozenset({"bridge", "derived"})
+BRIDGE_EXTRACTION_FALLBACK_MODEL = "gpt-5.2"
 OBJECT_LAYER_HINT_KEYWORDS = (
     "notation",
     "object",
@@ -1140,6 +1141,7 @@ def _prose_to_structured_bridge(
         },
     }
 
+    extraction_model = _resolve_bridge_extraction_model(model)
     for fmt in [schema_format, {"type": "json_object"}]:
         try:
             response = chat_completion(
@@ -1147,7 +1149,7 @@ def _prose_to_structured_bridge(
                     {"role": "system", "content": "You are a JSON extraction assistant. Return only valid JSON."},
                     {"role": "user", "content": extraction_prompt},
                 ],
-                model=model,
+                model=extraction_model,
                 temperature=0.0,
                 response_format=fmt,
             )
@@ -1815,7 +1817,7 @@ def _run_experiment_skill_with_code_fallback(
             "premises": [],
             "steps": [code],
             "conclusion": {
-                "statement": f"Experimental evidence strongly supports: {target.statement}",
+                "statement": f"Experimental evidence for claim tested in code (target: {target.statement[:120]})",
                 "formal_statement": None,
             },
             "module": "experiment",
@@ -1931,6 +1933,21 @@ def _llm_record_path(record_dir: Optional[Path], stem: str, attempt: int) -> Opt
     return record_dir / f"{stem}_attempt_{attempt}.txt"
 
 
+def _resolve_bridge_extraction_model(model: Optional[str]) -> Optional[str]:
+    try:
+        from discovery_zero.config import CONFIG
+
+        explicit = (getattr(CONFIG, "claim_extraction_model", "") or "").strip()
+        if explicit:
+            return explicit
+    except Exception:
+        pass
+    resolved_model = (model or "").strip()
+    if "Claude-4.6-opus" in resolved_model:
+        return BRIDGE_EXTRACTION_FALLBACK_MODEL
+    return model
+
+
 def run_plausible_action(
     graph: HyperGraph,
     target_node_id: str,
@@ -1982,7 +1999,8 @@ def run_plausible_action(
                     "content": (
                         skill_prompt + "\n\n"
                         "Think step by step. Explain your reasoning in natural language. "
-                        "Do NOT try to format as JSON yet."
+                        "Do NOT try to format as JSON yet. "
+                        "Output your complete route with no preamble, focusing on the most promising proof path."
                     ),
                 },
                 {"role": "user", "content": task_input},
@@ -2142,10 +2160,11 @@ def run_experiment_action(
 
         if has_concrete_counterexample and trials >= 1000 and pass_rate == 0.0:
             penalty_confidence = 0.95
-            outcome = "refuted"
+            outcome = "weakened"
             reasoning = (
                 f"Experiment found concrete counterexamples with zero successful trials "
-                f"across {trials} runs; this is treated as a strong empirical refutation."
+                f"across {trials} runs. Strong empirical evidence but only formal "
+                f"verification (Lean) can hard-refute; belief sharply reduced via BP."
             )
         elif has_concrete_counterexample and trials >= 100 and pass_rate == 0.0:
             penalty_confidence = 0.90
@@ -2182,11 +2201,25 @@ def run_experiment_action(
                 "This may indicate a coding issue rather than a mathematical refutation."
             )
 
+        # Attribute the result to what the experiment ACTUALLY tested (the
+        # LLM's own conclusion), not blindly to the target.  When the LLM
+        # tests an incorrect auxiliary formula, the penalty should land on
+        # that auxiliary node and propagate via BP — not hammer the target.
+        exp_conclusion = normalized.get("conclusion", {})
+        if isinstance(exp_conclusion, dict):
+            exp_conclusion_stmt = exp_conclusion.get("statement", "").strip()
+        elif isinstance(exp_conclusion, str):
+            exp_conclusion_stmt = exp_conclusion.strip()
+        else:
+            exp_conclusion_stmt = ""
+        if not exp_conclusion_stmt:
+            exp_conclusion_stmt = target.statement
+
         final_output = {
             "module": "experiment",
             "domain": normalized.get("domain", target.domain),
             "outcome": outcome,
-            "conclusion": {"statement": target.statement},
+            "conclusion": {"statement": exp_conclusion_stmt},
             "confidence": penalty_confidence,
             "steps": [
                 code,
@@ -2435,6 +2468,65 @@ def run_lean_action(
         result = verify_proof(lean_code, workspace_path=lean_workspace, timeout=timeout)
         if not result.success:
             last_error = result.error_message or result.stderr or "Lean build failed."
+            try:
+                from discovery_zero.config import CONFIG
+
+                if getattr(CONFIG, "tactic_prover_enabled", False):
+                    from discovery_zero.tools.lean_tactic import LeanTacticServer, TacticByTacticProver
+
+                    theorem_statement = (target.formal_statement or target.statement).strip()
+                    if theorem_statement:
+                        tactic_server = LeanTacticServer(
+                            workspace_path=lean_workspace,
+                            timeout=min(60.0, float(timeout)),
+                        )
+                        tactic_prover = TacticByTacticProver(
+                            server=tactic_server,
+                            model=model,
+                            candidates_per_goal=max(1, int(CONFIG.tactic_prover_candidates_per_goal)),
+                            max_depth=max(1, int(CONFIG.tactic_prover_max_depth)),
+                            beam_width=max(1, int(CONFIG.tactic_prover_beam_width)),
+                            timeout_seconds=max(10.0, float(CONFIG.tactic_prover_timeout)),
+                        )
+                        tactic_result = tactic_prover.prove_with_sorry_sketch(
+                            theorem_statement=theorem_statement,
+                            context=target.statement,
+                        )
+                        if tactic_result.success and tactic_result.proof_tactics:
+                            tactic_lines = "\n".join(f"  {line}" for line in tactic_result.proof_tactics)
+                            tactic_lean_code = (
+                                "import Mathlib\n\n"
+                                f"theorem discovery_target : {theorem_statement} := by\n"
+                                f"{tactic_lines}\n"
+                            )
+                            tactic_verify = verify_proof(
+                                tactic_lean_code,
+                                workspace_path=lean_workspace,
+                                timeout=timeout,
+                            )
+                            if tactic_verify.success:
+                                final_output = tactic_verify.to_ingest_dict(
+                                    premises=normalized_premises,
+                                    conclusion_statement=target.statement,
+                                    steps=[
+                                        tactic_lean_code,
+                                        "TacticByTacticProver fallback: lake build succeeded",
+                                    ],
+                                    domain=normalized_domain or "number_theory",
+                                )
+                                return last_raw, final_output, None
+                            last_error = (
+                                tactic_verify.error_message
+                                or tactic_verify.stderr
+                                or "Tactic prover fallback generated invalid Lean."
+                            )
+                        else:
+                            last_error = (
+                                f"{last_error}\n"
+                                f"Tactic prover fallback failed: {tactic_result.error_message or 'no proof found'}"
+                            )
+            except Exception as tactic_exc:
+                last_error = f"{last_error}\nTactic prover fallback error: {tactic_exc}"
             continue
 
         final_output = result.to_ingest_dict(

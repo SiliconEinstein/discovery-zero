@@ -95,6 +95,35 @@ def ingest_skill_output(
     provenance = output.get("provenance", module.value)
 
     if outcome == "refuted":
+        # Only formal (Lean) verification may hard-refute a node.
+        # Experiments can produce false refutations (e.g. testing an incorrect
+        # auxiliary formula instead of the target), so they are downgraded to
+        # "weakened" — a strong belief penalty that still lets BP recover if
+        # other evidence supports the claim.
+        if module == Module.EXPERIMENT:
+            penalty = float(output.get("confidence", 0.9))
+            conclusion = output.get("conclusion")
+            if not conclusion:
+                return None
+            conclusion_statement = (
+                conclusion if isinstance(conclusion, str) else conclusion.get("statement", "")
+            )
+            existing = graph.find_node_ids_by_statement(conclusion_statement)
+            if existing:
+                node = graph.nodes[existing[0]]
+                if not node.is_locked():
+                    node.prior = max(0.05, node.prior * (1.0 - penalty))
+            else:
+                weakened_belief = max(0.05, 0.5 * (1.0 - penalty))
+                graph.add_node(
+                    statement=conclusion_statement,
+                    belief=weakened_belief,
+                    prior=weakened_belief,
+                    domain=output.get("domain"),
+                    provenance=provenance,
+                )
+            return None
+
         conclusion = output.get("conclusion")
         if not conclusion:
             raise ValueError("Refutation output must contain 'conclusion'.")
@@ -129,7 +158,6 @@ def ingest_skill_output(
         if existing:
             node = graph.nodes[existing[0]]
             if not node.is_locked():
-                node.belief = max(0.05, node.belief * (1.0 - penalty))
                 node.prior = max(0.05, node.prior * (1.0 - penalty))
         else:
             weakened_belief = max(0.05, 0.5 * (1.0 - penalty))
@@ -299,18 +327,23 @@ def ingest_verified_claim(
             node.belief = 1.0
         elif verification_source == "experiment":
             node.prior = max(node.prior, 0.85)
-            node.belief = max(node.belief, 0.85)
             if node.state == "refuted":
                 node.state = "unverified"
         else:
             node.prior = max(node.prior, 0.6)
-            node.belief = max(node.belief, 0.6)
             if node.state == "refuted":
                 node.state = "unverified"
     elif verdict_normalized == "refuted":
-        node.state = "refuted"
-        node.prior = 0.0
-        node.belief = 0.0
+        if verification_source == "lean":
+            # Only formal Lean verification can hard-refute a node.
+            node.state = "refuted"
+            node.prior = 0.0
+            node.belief = 0.0
+        else:
+            # All non-formal sources (experiment, llm_judge, heuristic, etc.)
+            # apply a sharp belief penalty but let BP determine the posterior.
+            if not node.is_locked():
+                node.prior = max(0.05, node.prior * 0.05)
     else:
         try:
             from discovery_zero.config import CONFIG
@@ -319,7 +352,6 @@ def ingest_verified_claim(
             unverified_prior = DEFAULT_UNVERIFIED_CLAIM_PRIOR
         if not node.is_locked():
             node.prior = max(unverified_prior, min(node.prior, 0.4))
-            node.belief = max(unverified_prior, min(node.belief, 0.4))
 
     # When a new node was created and a parent edge is provided, create a
     # hyperedge connecting this new node as a premise to the conclusion of

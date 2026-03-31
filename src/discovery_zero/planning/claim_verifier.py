@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
+from libs.inference.factor_graph import CROMWELL_EPS
+
 from discovery_zero.graph.models import HyperGraph
 from discovery_zero.planning.incremental_codegen import IncrementalCodeGenerator
 from discovery_zero.tools.experiment_backend import get_experiment_backend, validate_python_code
@@ -419,13 +421,12 @@ class ClaimVerifier:
             if len(matches) != 1:
                 continue
             node = graph.nodes[matches[0]]
+            if node.is_locked():
+                continue
             if item.verdict == "verified":
-                node.belief = min(1.0, node.belief + positive_delta)
-                node.prior = max(node.prior, node.belief)
+                node.prior = min(1.0 - CROMWELL_EPS, node.prior + positive_delta)
                 updated += 1
             elif item.verdict == "refuted":
-                node.state = "refuted"
-                node.belief = 0.0
-                node.prior = 0.0
+                node.prior = max(CROMWELL_EPS, node.prior * 0.1)
                 updated += 1
         return updated
