@@ -247,6 +247,15 @@ def ingest_skill_output(
     if module == Module.LEAN and _all_premises_proven_or_axiom(graph, premise_ids):
         _set_node_proven(graph, conclusion_id)
 
+    # Successful experiment = observational evidence for the conclusion.
+    # Raise conclusion prior so BP can propagate support through this edge.
+    # This mirrors ingest_verified_claim's experiment path (prior → 0.85).
+    if module == Module.EXPERIMENT:
+        conclusion_node = graph.nodes[conclusion_id]
+        if not conclusion_node.is_locked():
+            exp_prior = min(0.85, max(conclusion_node.prior, confidence))
+            conclusion_node.prior = exp_prior
+
     return edge
 
 
