@@ -336,6 +336,7 @@ def execute_bridge_followups(
     model: Optional[str] = None,
     backend: str = "bp",
     max_rounds: int = 2,
+    record_dir: Optional[Path] = None,
 ) -> list[ActionResult]:
     """
     Consume a validated route by building a bridge plan and executing local follow-ups.
@@ -470,6 +471,7 @@ def execute_bridge_followups(
             graph,
             graph_target_id,
             model=model,
+            record_dir=record_dir,
         )
         bridge_experiment_result = ActionResult(
             action="bridge_experiment",

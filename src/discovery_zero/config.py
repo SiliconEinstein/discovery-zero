@@ -243,7 +243,7 @@ class ZeroConfig:
     experiment_prior_cap: float = _env_float("DISCOVERY_ZERO_EXPERIMENT_PRIOR_CAP", 0.85)
     verified_prior_floor: float = _env_float("DISCOVERY_ZERO_VERIFIED_PRIOR_FLOOR", 0.6)
     inconclusive_prior_cap: float = _env_float("DISCOVERY_ZERO_INCONCLUSIVE_PRIOR_CAP", 0.4)
-    refutation_prior_multiplier: float = _env_float("DISCOVERY_ZERO_REFUTATION_PRIOR_MULTIPLIER", 0.05)
+    refutation_prior_multiplier: float = _env_float("DISCOVERY_ZERO_REFUTATION_PRIOR_MULTIPLIER", 0.3)
     bridge_grade_prior_a: float = _env_float("DISCOVERY_ZERO_GRADE_PRIOR_A", 0.92)
     bridge_grade_prior_b: float = _env_float("DISCOVERY_ZERO_GRADE_PRIOR_B", 0.70)
     bridge_grade_prior_c: float = _env_float("DISCOVERY_ZERO_GRADE_PRIOR_C", 0.50)
