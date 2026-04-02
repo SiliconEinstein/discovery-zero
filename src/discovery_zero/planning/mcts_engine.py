@@ -14,8 +14,11 @@ Instead, it composes:
 from __future__ import annotations
 
 import concurrent.futures
+import json
+import logging
+import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -53,6 +56,8 @@ from discovery_zero.planning.orchestrator import (
 from discovery_zero.planning.problem_variants import ProblemVariantGenerator
 from discovery_zero.planning.search import RMaxTSSearch, SearchState, rank_frontiers, select_module_ucb
 from discovery_zero.tools.retrieval import HypergraphRetrievalIndex
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -167,6 +172,8 @@ class MCTSDiscoveryEngine:
         self._plausible_stall_cycles = 0
         # Track module outcomes across nodes to suppress globally failing modes.
         self._recent_module_history: list[tuple[Module, bool]] = []
+        # Consecutive iterations where target node has no incoming support edges.
+        self._target_isolation_streak: int = 0
 
     def run(
         self,
@@ -207,8 +214,21 @@ class MCTSDiscoveryEngine:
         experiment_attempts = 0
         lean_attempts = 0
         rolling_feedback = planning_feedback
+        iter_budget_seconds = float(os.environ.get("DISCOVERY_ZERO_MCTS_ITER_BUDGET", "0").strip() or "0")
+        if iter_budget_seconds <= 0:
+            iter_budget_seconds = min(
+                max(
+                    (self.config.max_time_seconds / max(self.config.max_iterations, 1)) * 3.0,
+                    1200.0,
+                ),
+                3600.0,
+            )
+        post_action_budget_seconds = 300.0
+        checkpoint_dir = self.graph_path.parent / "action_checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         for iteration in range(1, self.config.max_iterations + 1):
+            iter_start = time.monotonic()
             steps_before_iteration = len(result.steps)
             lean_feedback_iteration = ""
             if time.monotonic() - t0 > self.config.max_time_seconds:
@@ -220,12 +240,32 @@ class MCTSDiscoveryEngine:
             if target_node.state in {"proven", "refuted"}:
                 result.success = target_node.state == "proven"
                 break
+            target_incoming_edges = graph.get_edges_to(self.target_node_id)
+            if target_incoming_edges:
+                self._target_isolation_streak = 0
+            else:
+                self._target_isolation_streak += 1
 
             retrieval_context = ""
             if self.config.enable_retrieval and self.retrieval_index is not None:
                 self.retrieval_index.build_from_graph(graph)
 
             selected_node_id, selected_module, selected_path = self._select_action(graph)
+            if self._target_isolation_streak > 2:
+                selected_node_id = self.target_node_id
+                selected_module = Module.PLAUSIBLE
+                selected_path = [self.target_node_id]
+                result.steps.append(
+                    {
+                        "phase": "target_isolation_recovery",
+                        "iteration": iteration,
+                        "message": (
+                            "Target node has remained isolated for more than two "
+                            "iterations; forcing PLAUSIBLE action on root goal."
+                        ),
+                        "target_node_id": self.target_node_id,
+                    }
+                )
             if selected_node_id not in graph.nodes:
                 result.steps.append(
                     {
@@ -253,13 +293,71 @@ class MCTSDiscoveryEngine:
             target_belief_before = float(target_node.belief)
             graph_snapshot_before = graph.model_dump_json()
 
-            action_result = self._execute_selected_action(
-                graph=graph,
-                node_id=selected_node_id,
-                module=selected_module,
-                boundary_policy=boundary_policy,
-                feedback=combined_feedback,
-            )
+            try:
+                action_result = self._execute_selected_action(
+                    graph=graph,
+                    node_id=selected_node_id,
+                    module=selected_module,
+                    boundary_policy=boundary_policy,
+                    feedback=combined_feedback,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Iteration %d action execution failed for node=%s module=%s",
+                    iteration,
+                    selected_node_id,
+                    selected_module.value,
+                )
+                result.steps.append(
+                    {
+                        "phase": "iteration_error",
+                        "iteration": iteration,
+                        "node_id": selected_node_id,
+                        "action_module": selected_module.value,
+                        "error": str(exc),
+                    }
+                )
+                result.iterations_completed = iteration
+                stuck_rounds += 1
+                try:
+                    save_graph(graph, self.graph_path)
+                except Exception as save_exc:
+                    logger.warning("Failed to save graph after iteration error: %s", save_exc)
+                if on_iteration_complete is not None:
+                    on_iteration_complete(iteration, result)
+                continue
+            try:
+                checkpoint_path = checkpoint_dir / f"iter_{iteration:04d}_action_result.json"
+                checkpoint_payload = {
+                    "iteration": iteration,
+                    "node_id": selected_node_id,
+                    "module": selected_module.value,
+                    "created_at": time.time(),
+                    "result": asdict(action_result),
+                }
+                checkpoint_path.write_text(
+                    json.dumps(checkpoint_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                logger.warning("Failed to checkpoint action result at iteration %d: %s", iteration, exc)
+
+            elapsed_after_action = time.monotonic() - iter_start
+            remaining_budget = iter_budget_seconds - elapsed_after_action
+            skip_optional_followups = remaining_budget < post_action_budget_seconds
+            if skip_optional_followups:
+                result.steps.append(
+                    {
+                        "phase": "iteration_budget_warning",
+                        "iteration": iteration,
+                        "node_id": selected_node_id,
+                        "action_module": selected_module.value,
+                        "message": (
+                            f"Remaining budget {max(0.0, remaining_budget):.1f}s < post-action "
+                            f"critical budget {post_action_budget_seconds:.1f}s; skipping optional followups."
+                        ),
+                    }
+                )
             if not action_result.success:
                 self._record_recent_module_outcome(selected_module, False)
                 self.search_state.record_action(
@@ -290,50 +388,85 @@ class MCTSDiscoveryEngine:
                 continue
 
             verify_bonus: float = 0.0
-            if action_result.normalized_output is not None:
-                # Only force the conclusion to map to the MCTS target node when
-                # the action was explicitly targeting that node.  Passing
-                # target_node_id unconditionally would hijack conclusions for
-                # actions on bridge propositions (whose conclusions should be
-                # their own nodes, not the overall goal).
-                action_targets_mcts_goal = (
-                    getattr(action_result, "target_node_id", "") == self.target_node_id
-                )
-                action_result = ingest_action_output(
-                    self.graph_path,
-                    action_result,
-                    backend=self.backend,
-                    target_node_id=self.target_node_id if action_targets_mcts_goal else None,
-                )
-                # For PLAUSIBLE actions: first generate the bridge plan so that
-                # bridge nodes are materialised into the graph BEFORE claim
-                # verification runs.  This lets the claim pipeline map claims
-                # to bridge propositions by ID (via bridge_node_map), which
-                # avoids text-matching and ensures verification results flow
-                # to connected graph nodes.
-                if selected_module == Module.PLAUSIBLE:
-                    plausible_attempts += 1
-                    graph = load_graph(self.graph_path)
-                    self._handle_plausible_followups(
-                        graph=graph,
-                        action_result=action_result,
-                        feedback=combined_feedback,
-                        result=result,
+            try:
+                if action_result.normalized_output is not None:
+                    # Only force the conclusion to map to the MCTS target node when
+                    # the action was explicitly targeting that node.  Passing
+                    # target_node_id unconditionally would hijack conclusions for
+                    # actions on bridge propositions (whose conclusions should be
+                    # their own nodes, not the overall goal).
+                    action_targets_mcts_goal = (
+                        getattr(action_result, "target_node_id", "") == self.target_node_id
                     )
-                    # Now run verification pipeline with bridge plan context.
-                    self._verification_run_counter += 1
-                    verification_steps, lean_feedback, verify_bonus = self._run_verification_pipeline(
-                        action_result=action_result,
-                        combined_feedback=combined_feedback,
-                        bridge_plan=result.best_bridge_plan,
-                        bridge_node_map=result.best_bridge_node_map,
+                    action_result = ingest_action_output(
+                        self.graph_path,
+                        action_result,
+                        backend=self.backend,
+                        target_node_id=self.target_node_id if action_targets_mcts_goal else None,
                     )
-                    result.steps.extend(verification_steps)
-                    lean_feedback_iteration = lean_feedback
-                    if lean_feedback:
-                        combined_feedback = "\n\n".join(
-                            part for part in (combined_feedback, lean_feedback) if part
+                    # For PLAUSIBLE actions: first generate the bridge plan so that
+                    # bridge nodes are materialised into the graph BEFORE claim
+                    # verification runs.  This lets the claim pipeline map claims
+                    # to bridge propositions by ID (via bridge_node_map), which
+                    # avoids text-matching and ensures verification results flow
+                    # to connected graph nodes.
+                    if selected_module == Module.PLAUSIBLE and not skip_optional_followups:
+                        plausible_attempts += 1
+                        graph = load_graph(self.graph_path)
+                        self._handle_plausible_followups(
+                            graph=graph,
+                            action_result=action_result,
+                            feedback=combined_feedback,
+                            result=result,
                         )
+                        # Now run verification pipeline with bridge plan context.
+                        self._verification_run_counter += 1
+                        verification_steps, lean_feedback, verify_bonus = self._run_verification_pipeline(
+                            action_result=action_result,
+                            combined_feedback=combined_feedback,
+                            bridge_plan=result.best_bridge_plan,
+                            bridge_node_map=result.best_bridge_node_map,
+                        )
+                        result.steps.extend(verification_steps)
+                        lean_feedback_iteration = lean_feedback
+                        if lean_feedback:
+                            combined_feedback = "\n\n".join(
+                                part for part in (combined_feedback, lean_feedback) if part
+                            )
+                    elif selected_module == Module.PLAUSIBLE and skip_optional_followups:
+                        result.steps.append(
+                            {
+                                "phase": "plausible_followups_skipped",
+                                "iteration": iteration,
+                                "node_id": selected_node_id,
+                                "reason": "insufficient_followup_budget_after_action",
+                            }
+                        )
+            except Exception as exc:
+                logger.exception(
+                    "Iteration %d post-action processing failed for node=%s module=%s",
+                    iteration,
+                    selected_node_id,
+                    selected_module.value,
+                )
+                result.steps.append(
+                    {
+                        "phase": "iteration_error",
+                        "iteration": iteration,
+                        "node_id": selected_node_id,
+                        "action_module": selected_module.value,
+                        "error": str(exc),
+                    }
+                )
+                result.iterations_completed = iteration
+                stuck_rounds += 1
+                try:
+                    save_graph(load_graph(self.graph_path), self.graph_path)
+                except Exception as save_exc:
+                    logger.warning("Failed to persist graph after post-action error: %s", save_exc)
+                if on_iteration_complete is not None:
+                    on_iteration_complete(iteration, result)
+                continue
             graph = load_graph(self.graph_path)
             updated_target = graph.nodes.get(self.target_node_id)
             target_belief_after = float(updated_target.belief) if updated_target is not None else target_belief_before
@@ -615,8 +748,12 @@ class MCTSDiscoveryEngine:
                     node_on_bridge = any(
                         target_nid in e.premise_ids for e in _g.edges.values()
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Verification future failed in run %s: %s",
+                        self._verification_run_counter,
+                        exc,
+                    )
             if node_on_bridge:
                 reward += 0.25  # bridge proposition experiment: full reward
             else:
@@ -1097,8 +1234,12 @@ class MCTSDiscoveryEngine:
                 # prior updates.
                 vr.claim_id = real_node_id
                 ingested += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to ingest verification result for claim '%s': %s",
+                    claim.claim_text[:120],
+                    exc,
+                )
 
         # Apply legacy belief updates from ClaimVerifier results for claims
         # that were NOT handled via bridge_node_map (unmapped claims only).
@@ -1128,8 +1269,8 @@ class MCTSDiscoveryEngine:
                     force=force_now,
                 )
                 save_graph(graph_bp, self.graph_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to propagate verification signals: %s", exc)
 
         # ---- 5. Collect Lean feedback for next iteration ----
         # vr.claim_id has been overwritten with the real graph node ID in step 3.
@@ -1566,6 +1707,64 @@ class MCTSDiscoveryEngine:
 
         followups: list[ActionResult] = []
         if plan is not None:
+            try:
+                from discovery_zero.config import CONFIG as _cfg
+
+                if getattr(_cfg, "spec_decomp_enabled", False):
+                    from discovery_zero.graph.session import GraphSession
+                    from discovery_zero.planning.bridge_executor import SpeculativeDecomposer
+
+                    session = GraphSession(graph.model_copy(deep=True))
+
+                    def _generate_spec_plan(**kwargs: Any) -> BridgePlan:
+                        _raw_spec, spec_plan = run_bridge_planning_action(
+                            kwargs["graph"],
+                            kwargs["target_node_id"],
+                            action_result.normalized_output or {},
+                            judge_output=action_result.judge_output,
+                            model=kwargs.get("model") or self.model,
+                            feedback=feedback,
+                            max_attempts=1,
+                        )
+                        return spec_plan
+
+                    speculative = SpeculativeDecomposer(
+                        session=session,
+                        target_node_id=self.target_node_id,
+                        generate_plan_fn=_generate_spec_plan,
+                        pav=None,
+                        num_candidates=max(1, int(getattr(_cfg, "spec_decomp_num_candidates", 3))),
+                        model=self.model,
+                    )
+                    best_spec = speculative.generate_and_score()
+                    if best_spec is not None:
+                        result.steps.append(
+                            {
+                                "phase": "spec_decomposition",
+                                "enabled": True,
+                                "candidate_index": best_spec.candidate.candidate_index,
+                                "total_score": round(float(best_spec.total_score), 6),
+                                "belief_gain": round(float(best_spec.belief_gain), 6),
+                                "grade_quality": round(float(best_spec.grade_quality), 6),
+                                "constraint_valid": bool(best_spec.constraint.is_valid),
+                            }
+                        )
+                    else:
+                        result.steps.append(
+                            {
+                                "phase": "spec_decomposition",
+                                "enabled": True,
+                                "message": "No valid speculative decomposition candidate found.",
+                            }
+                        )
+            except Exception as exc:
+                result.steps.append(
+                    {
+                        "phase": "spec_decomposition",
+                        "enabled": True,
+                        "error": str(exc),
+                    }
+                )
             try:
                 from discovery_zero.config import CONFIG as _cfg
                 from discovery_zero.planning.orchestrator import plan_bridge_consumption as _pbc

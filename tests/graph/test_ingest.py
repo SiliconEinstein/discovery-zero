@@ -122,6 +122,8 @@ class TestIngest:
         assert c.belief == 1.0
 
     def test_ingest_refutation_marks_conclusion_refuted(self):
+        """Experiment refutation should weaken (not hard-refute) the node.
+        Only formal (Lean) verification may hard-refute."""
         g = HyperGraph()
         n = g.add_node("Bad conjecture", belief=0.5)
         assert g.nodes[n.id].state == "unverified"
@@ -129,6 +131,22 @@ class TestIngest:
             "module": "experiment",
             "outcome": "refuted",
             "conclusion": {"statement": "Bad conjecture"},
+        }
+        edge = ingest_skill_output(g, out)
+        assert edge is None
+        # Experiment weakens belief sharply but does NOT hard-refute
+        assert g.nodes[n.id].state == "unverified"
+        assert g.nodes[n.id].prior < 0.1
+        assert g.nodes[n.id].prior > 0.0
+
+    def test_ingest_lean_refutation_marks_conclusion_refuted(self):
+        """Lean (formal) refutation SHOULD hard-refute the node."""
+        g = HyperGraph()
+        n = g.add_node("Wrong lemma", belief=0.5)
+        out = {
+            "module": "lean",
+            "outcome": "refuted",
+            "conclusion": {"statement": "Wrong lemma"},
         }
         edge = ingest_skill_output(g, out)
         assert edge is None
@@ -167,4 +185,6 @@ class TestIngest:
         edge = ingest_skill_output(g, out)
         assert edge is None
         assert len(g.nodes) == 1
-        assert g.nodes[n.id].state == "refuted"
+        # Experiment weakens but does not hard-refute
+        assert g.nodes[n.id].state == "unverified"
+        assert g.nodes[n.id].prior < 0.1

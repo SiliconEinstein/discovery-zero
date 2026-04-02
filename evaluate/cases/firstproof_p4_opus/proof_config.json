@@ -1,0 +1,66 @@
+{
+  "model": "cds/Claude-4.6-opus",
+  "domain": "algebraic combinatorics / spectral graph theory",
+  "lean_workspace": null,
+  "lean_boundary_policy": null,
+  "seed_policy": "frontier_assisted",
+  "seed_nodes": [
+    {
+      "key": "free_convolution_def",
+      "statement": "For two monic polynomials p(x) = sum_{k=0}^{n} a_k x^{n-k} and q(x) = sum_{k=0}^{n} b_k x^{n-k} (with a_0 = b_0 = 1) of degree n, define the finite free convolution p ⊞_n q to be the monic polynomial of degree n whose k-th coefficient c_k = sum_{i+j=k} [(n-i)!(n-j)! / (n!(n-k)!)] a_i b_j.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "algebra"
+    },
+    {
+      "key": "free_convolution_root_preservation",
+      "statement": "Marcus–Spielman–Srivastava (2022): If p(x) and q(x) are monic real-rooted polynomials of degree n, then p ⊞_n q is also real-rooted. The roots of p ⊞_n q interlace with those of p and q in a controlled manner related to finite free probability.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "algebraic combinatorics"
+    },
+    {
+      "key": "phi_n_def",
+      "statement": "For a monic polynomial p(x) = prod_{i<=n} (x - lambda_i) with simple roots, define Phi_n(p) = sum_{i<=n} (sum_{j != i} 1/(lambda_i - lambda_j))^2. Set Phi_n(p) = infinity if p has a multiple root. Phi_n measures the 'crowding' of roots: smaller Phi_n means roots are better separated.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "polynomial analysis"
+    },
+    {
+      "key": "vieta_formulas",
+      "statement": "Vieta's formulas: For a monic polynomial p(x) = x^n + a_1 x^{n-1} + ... + a_n with roots lambda_1, ..., lambda_n, the coefficients a_k are (up to sign) the elementary symmetric polynomials e_k(lambda_1, ..., lambda_n). In particular a_1 = -sum(lambda_i), a_2 = sum_{i<j}(lambda_i lambda_j), etc.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "algebra"
+    },
+    {
+      "key": "cauchy_interlacing",
+      "statement": "Cauchy's Interlacing Theorem: If A is a real symmetric n x n matrix with eigenvalues alpha_1 <= ... <= alpha_n and B is a principal (n-1) x (n-1) submatrix with eigenvalues beta_1 <= ... <= beta_{n-1}, then alpha_1 <= beta_1 <= alpha_2 <= beta_2 <= ... <= beta_{n-1} <= alpha_n.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "linear algebra"
+    },
+    {
+      "key": "electrostatic_interpretation",
+      "statement": "The expression sum_{j != i} 1/(lambda_i - lambda_j) appears in the electrostatic/logarithmic energy interpretation of polynomial roots. The critical points of the logarithmic potential sum_i log|x - lambda_i| satisfy sum_{j != i} 1/(x - lambda_j) = 0, connecting Phi_n to energy minimization and root dynamics.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "potential theory"
+    }
+  ],
+  "target": {
+    "key": "firstproof_p4",
+    "statement": "Let p(x) and q(x) be monic real-rooted polynomials of degree n. Define p ⊞_n q by coefficients c_k = sum_{i+j=k} [(n-i)!(n-j)! / (n!(n-k)!)] a_i b_j. Define Phi_n(p) = sum_{i<=n} (sum_{j!=i} 1/(lambda_i - lambda_j))^2 for simple roots lambda_i, and Phi_n(p) = infinity if p has a multiple root. Prove that 1/Phi_n(p ⊞_n q) >= 1/Phi_n(p) + 1/Phi_n(q).",
+    "belief": 0.1,
+    "state": "unverified",
+    "domain": "algebraic combinatorics / spectral graph theory"
+  },
+  "planning_constraints": [
+    "The inequality 1/Phi_n(p ⊞_n q) >= 1/Phi_n(p) + 1/Phi_n(q) is a superadditivity statement for 1/Phi_n under free convolution.",
+    "This resembles a 'Brunn-Minkowski' type inequality; explore connections to convexity of root distributions.",
+    "Computational experiments should verify the inequality for small n and specific polynomial families before attempting a general proof.",
+    "The free convolution ⊞_n preserves real-rootedness (Marcus-Spielman-Srivastava), which is essential.",
+    "Consider differentiation-based approaches: Phi_n is related to the second logarithmic derivative of the polynomial.",
+    "Do not assume the result; all intermediate steps must be justified."
+  ]
+}

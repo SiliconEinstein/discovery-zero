@@ -1,0 +1,28 @@
+{
+  "case_id": "firstproof_p4",
+  "display_name": "FirstProof P4: 自由卷积根分离不等式",
+  "source_proof_config": "proof_config.json",
+  "benchmark_scope": "Prove that 1/Phi_n(p ⊞_n q) >= 1/Phi_n(p) + 1/Phi_n(q) for monic real-rooted polynomials p, q of degree n, where ⊞_n is finite free convolution and Phi_n measures root crowding.",
+  "tags": ["mathematics", "algebraic-combinatorics", "spectral-graph-theory", "firstproof", "research-level"],
+  "allow_refutation": true,
+  "model": "gpt-5.2",
+  "timeouts": {
+    "experiment": 180,
+    "decompose": 240,
+    "lean": 360
+  },
+  "lean_policy": {
+    "mode": "selective",
+    "enable_decomposition": false,
+    "enable_strict_lean": true,
+    "min_path_confidence": 0.8,
+    "max_grade_d_ratio": 0.2,
+    "allowed_strict_modes": ["direct_proof", "lemma"]
+  },
+  "planning_constraints": [
+    "Start with computational experiments for small n (n=2,3,4,5) to build intuition.",
+    "Explore both direct algebraic approaches and probabilistic/free-probability interpretations.",
+    "The connection between Phi_n and the Hessian of the log-discriminant may be useful.",
+    "Do not assume the result; derive every step from the seeds."
+  ]
+}

@@ -119,7 +119,19 @@ pytest -q
 
 详见 `PAPER_HOMOCHIRALITY.md` 和 `run_01/` 目录下的完整 LLM 交互记录。
 
-## 10. 当前仓库清理说明
+## 10. 系统鲁棒性
+
+Discovery-Zero-v2 在以下方面经过工业级加固：
+
+- **BP 纯度**：软证据仅修改 `prior`，`belief` 由 Gaia BP 引擎计算；分解边作为 `SOFT_IMPLICATION` 参与 BP
+- **MCTS 异常安全**：单次迭代异常不会丢失图状态，自动恢复并继续下一轮
+- **信号处理**：`SIGTERM`/`SIGHUP` 双信号优雅终止，保证 `summary.json` 在所有终止场景下生成
+- **LLM 流式追踪**：准确统计实际文本字节（排除 SSE 元数据和 thinking token）
+- **Target 隔离检测**：当目标节点连续多轮无入边时自动强制探索
+
+详见 [docs/ARCHITECTURE_ZH.md](docs/ARCHITECTURE_ZH.md) §11 "2026-03-31 工业级加固"。
+
+## 11. 当前仓库清理说明
 
 本仓库已移除以下内容以便协作与推送：
 

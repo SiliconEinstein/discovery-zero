@@ -38,16 +38,24 @@ def adapt_zero_graph_v2(
         fg.add_variable(nid, prior)
 
     for eid, edge in graph.edges.items():
-        if edge.edge_type == "decomposition":
-            continue
         premises = [pid for pid in edge.premise_ids if pid in fg.variables]
         conclusion = edge.conclusion_id
         if conclusion not in fg.variables:
             continue
         if not premises:
             continue
-        p1_raw = max(float(edge.confidence), 1.0 - CROMWELL_EPS) if edge.edge_type == "formal" else float(edge.confidence)
-        # Neutral completion for absent premise branch.
+        if edge.edge_type == "formal":
+            p1_raw = max(float(edge.confidence), 1.0 - CROMWELL_EPS)
+        elif edge.edge_type == "decomposition":
+            # Decomposition edges represent "subgoals jointly support parent goal".
+            # Derive support strength from current subgoal beliefs so this evidence
+            # can flow into BP instead of being dropped as a structural-only edge.
+            premise_beliefs = [float(graph.nodes[pid].belief) for pid in premises if pid in graph.nodes]
+            p1_raw = min(premise_beliefs) if premise_beliefs else float(edge.confidence)
+        else:
+            p1_raw = float(edge.confidence)
+        # MaxEnt-neutral default for absent-premise branch (Gaia theory §2.2):
+        # p2=0.5 means "premise absent provides no directional evidence".
         p2 = 0.5
         # inference_v2 requires p1 + p2 > 1; keep a tiny positive margin.
         p1 = max(p1_raw, 1.0 - p2 + 1e-3)
@@ -70,6 +78,8 @@ def adapt_zero_graph_v2(
             factor_type=OperatorType.CONJUNCTION,
             premises=premises,
             conclusions=[mediator],
+            # NOTE: conjunction_potential uses fixed CROMWELL_EPS and ignores p.
+            # We still pass p for API uniformity/documentation.
             p=1.0 - CROMWELL_EPS,
         )
         fg.add_factor(

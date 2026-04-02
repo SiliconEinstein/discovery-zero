@@ -6,7 +6,7 @@ from discovery_zero.graph.adapter_v2 import adapt_zero_graph_v2
 from discovery_zero.graph.models import HyperGraph, Module
 
 
-def test_adapter_v2_maps_heuristic_formal_and_skips_decomposition():
+def test_adapter_v2_maps_heuristic_formal_and_includes_decomposition():
     graph = HyperGraph()
     a = graph.add_node("A", belief=0.8, prior=0.8)
     b = graph.add_node("B", belief=0.2, prior=0.2)
@@ -18,7 +18,7 @@ def test_adapter_v2_maps_heuristic_formal_and_skips_decomposition():
     adapted = adapt_zero_graph_v2(graph)
     factor_types = [f.factor_type for f in adapted.factor_graph.factors]
 
-    assert factor_types.count(FactorType.SOFT_IMPLICATION) == 2
+    assert factor_types.count(FactorType.SOFT_IMPLICATION) == 3
     assert all(f.factor_type != FactorType.CONJUNCTION for f in adapted.factor_graph.factors)
 
 

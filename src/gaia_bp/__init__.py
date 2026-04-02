@@ -12,7 +12,8 @@ Key differences from libs/inference (v1):
   - INDUCTION/ABDUCTION use noisy-AND + leak (bp.md §2.1: C4 ✓)
   - CONTRADICTION/EQUIVALENCE use fixed-eps strength (not a free parameter)
   - Relation variables are full BP participants (no gate_var hack)
-  - Five explicit FactorTypes (ENTAILMENT/INDUCTION/ABDUCTION/CONTRADICTION/EQUIVALENCE)
+  - Seven explicit FactorTypes (ENTAILMENT/INDUCTION/ABDUCTION/CONTRADICTION/
+    EQUIVALENCE/CONJUNCTION/SOFT_IMPLICATION)
   - String variable IDs throughout
   - BPDiagnostics always populated
   - Junction Tree for exact inference, GBP for region decomposition
@@ -20,7 +21,7 @@ Key differences from libs/inference (v1):
 
 Public API:
   FactorGraph      — bipartite factor graph construction
-  FactorType       — enum of five operator types
+  FactorType       — enum of seven operator types
   CROMWELL_EPS     — system constant ε = 1e-3 (Cromwell's rule)
   BeliefPropagation — loopy BP runner
   BPDiagnostics    — per-variable belief history and convergence info

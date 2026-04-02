@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6",
+  "display_name": "FirstProof P4 + P6 (GPT-5.2)",
+  "description": "Discovery Zero 求解 FirstProof 研究级数学问题：P4（自由卷积根分离不等式）和 P6（ε-light 子集存在性），使用 GPT-5.4 模型。",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4/case.json",
+    "cases/firstproof_p6/case.json"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "case_id": "firstproof_p6_gemini",
+  "display_name": "FirstProof P6: ε-light 子集存在性 (Gemini-3-Pro)",
+  "source_proof_config": "proof_config.json",
+  "benchmark_scope": "Prove there exists an absolute constant c > 0 such that for every graph G and every epsilon in (0,1), V contains an epsilon-light subset S of size at least c * epsilon * |V|.",
+  "tags": ["mathematics", "spectral-graph-theory", "linear-algebra", "firstproof", "research-level"],
+  "allow_refutation": true,
+  "model": "cds/Gemini-2.5-Pro",
+  "timeouts": {
+    "experiment": 180,
+    "decompose": 240,
+    "lean": 360
+  },
+  "lean_policy": {
+    "mode": "selective",
+    "enable_decomposition": false,
+    "enable_strict_lean": true,
+    "min_path_confidence": 0.8,
+    "max_grade_d_ratio": 0.2,
+    "allowed_strict_modes": ["direct_proof", "lemma"]
+  },
+  "planning_constraints": [
+    "Start with computational experiments on small graphs (K_n, cycles, paths, random graphs) to build intuition for what epsilon-light sets look like.",
+    "The probabilistic method is likely the right approach: random sampling with appropriate probability.",
+    "Consider both independent vertex sampling and more structured approaches (e.g., greedy, low-degree vertices first).",
+    "Matrix concentration inequalities may be needed to control the PSD condition.",
+    "Do not assume the result; derive every step from the seeds."
+  ]
+}

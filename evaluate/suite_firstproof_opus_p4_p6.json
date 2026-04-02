@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6_opus",
+  "display_name": "FirstProof P4 + P6 (Claude-4.6-opus)",
+  "description": "用 Claude-4.6-opus 求解 FirstProof P4 和 P6，并限制最大输出 tokens 为 12000 以减少长输出兼容问题。",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4_opus/case.json",
+    "cases/firstproof_p6_opus/case.json"
+  ]
+}

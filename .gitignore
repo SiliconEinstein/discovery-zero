@@ -26,3 +26,6 @@ evaluate/workspaces/*.log
 
 # Temporary case configs
 evaluate/cases/_tmp_alt_model/
+
+# Evaluation run outputs
+evaluation/

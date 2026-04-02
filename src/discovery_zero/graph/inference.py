@@ -340,20 +340,22 @@ def propagate_verification_signals(
     damping: float = 0.5,
     tol: float = 1e-6,
 ) -> int:
-    """Apply verification outcomes to priors and trigger BP once threshold is met."""
+    """Trigger BP for deterministic verification outcomes.
+
+    IMPORTANT:
+    - Prior/state updates happen in ingestion (`ingest_verified_claim`).
+    - This function only accumulates deterministic signals and schedules BP.
+    """
     deterministic_count = 0
     for item in verification_results:
         if isinstance(item, VerificationResult):
             verdict = item.verdict
             claim_id = item.claim_id
-            backend = item.backend
         else:
             verdict = str(item.get("verdict", "inconclusive")).strip().lower()
             claim_id = str(item.get("claim_id", "")).strip()
-            backend = str(item.get("backend", "")).strip()
         if verdict not in {"verified", "refuted"}:
             continue
-        deterministic_count += 1
         target_node = None
         if claim_id and claim_id in graph.nodes:
             target_node = graph.nodes[claim_id]
@@ -363,23 +365,7 @@ def propagate_verification_signals(
                 target_node = graph.nodes[matches[0]]
         if target_node is None:
             continue
-        if verdict == "refuted":
-            target_node.state = "refuted"
-            target_node.prior = 0.0
-            target_node.belief = 0.0
-            continue
-        if backend == "lean":
-            target_node.state = "proven"
-            target_node.prior = 1.0
-            target_node.belief = 1.0
-        elif backend == "experiment":
-            target_node.prior = max(target_node.prior, 0.85)
-            if not target_node.is_locked():
-                target_node.belief = max(target_node.belief, 0.85)
-        else:
-            target_node.prior = max(target_node.prior, 0.6)
-            if not target_node.is_locked():
-                target_node.belief = max(target_node.belief, 0.6)
+        deterministic_count += 1
 
     effective_acc = accumulator or SignalAccumulator(threshold=max(1, threshold))
     should_run = effective_acc.add(deterministic_count)

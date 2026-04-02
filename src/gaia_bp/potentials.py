@@ -2,7 +2,7 @@
 
 Theory reference: docs/foundations/theory/belief-propagation.md §2
 
-This module implements the potential families that cover all five operator
+This module implements the potential families that cover all seven operator
 types defined in reasoning-hypergraph.md §7.3.
 
 Potential functions take a full joint assignment {var_id: 0|1} and return a
