@@ -22,8 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from libs.inference_v2.factor_graph import CROMWELL_EPS
+
 from discovery_zero.graph.models import HyperGraph, Module
-from discovery_zero.graph.inference import apply_refutation_penalties
 
 
 @dataclass
@@ -33,11 +34,10 @@ class EnergyConfig:
     weight_plausible: float = 1.0
     weight_decomposition: float = 1.5
     weight_experiment: float = 5.0
-    weight_formal: float = 1e6
+    weight_formal: float = 100.0
     max_iterations: int = 200
     step_size: float = 0.1
     tol: float = 1e-6
-    refutation_penalty_ratio: float = 0.25
 
 
 def _edge_weight(edge, config: EnergyConfig) -> float:
@@ -149,17 +149,16 @@ def propagate_beliefs_energy(
         max_change = 0.0
         for nid in unverified_ids:
             g = grad.get(nid, 0.0)
-            new_x = max(0.0, min(1.0, x[nid] - eta * g))
+            new_x = max(CROMWELL_EPS, min(1.0 - CROMWELL_EPS, x[nid] - eta * g))
             change = abs(new_x - x[nid])
             max_change = max(max_change, change)
             x[nid] = new_x
-
-        for nid in unverified_ids:
-            graph.nodes[nid].belief = x[nid]
 
         if max_change < config.tol:
             iterations = it + 1
             break
 
-    apply_refutation_penalties(graph, penalty_ratio=config.refutation_penalty_ratio)
+    for nid in unverified_ids:
+        graph.nodes[nid].belief = x[nid]
+
     return iterations

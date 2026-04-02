@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -10,10 +11,13 @@ from discovery_zero.graph.ingest import ingest_verified_claim
 from discovery_zero.graph.inference import SignalAccumulator, propagate_verification_signals
 from discovery_zero.graph.memo import Claim, ResearchMemo, VerificationResult
 from discovery_zero.graph.models import HyperGraph
+from discovery_zero.config import CONFIG
 from discovery_zero.planning.claim_pipeline import ClaimPipeline
 from discovery_zero.planning.claim_verifier import ClaimVerifier, VerifiableClaim
 from discovery_zero.planning.lean_feedback import LeanFeedbackParser, StructuralClaimRouter
 from discovery_zero.tools.llm import chat_completion, extract_text_content
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,7 +61,10 @@ class VerificationLoop:
         self.config = config or VerificationLoopConfig()
         self.model = model
         self.claim_pipeline = claim_pipeline or ClaimPipeline()
-        self.claim_verifier = claim_verifier or ClaimVerifier(max_claims_per_call=self.config.max_claims_per_memo)
+        self.claim_verifier = claim_verifier or ClaimVerifier(
+            max_claims_per_call=self.config.max_claims_per_memo,
+            lean_verify_timeout=CONFIG.lean_timeout,
+        )
         self.lean_feedback_parser = lean_feedback_parser or LeanFeedbackParser()
         self.structural_router = structural_router or StructuralClaimRouter(max_decompose_depth=self.config.max_decompose_depth)
         self._signal_accumulator = SignalAccumulator(threshold=max(1, self.config.bp_propagation_threshold))
@@ -211,11 +218,15 @@ class VerificationLoop:
             )
 
         workers = max(1, self.config.verification_parallel_workers)
+        per_claim_timeout = float(CONFIG.lean_timeout) + 60.0
         out: list[VerificationResult] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(_verify_single, claim) for claim in claims]
-            for future in concurrent.futures.as_completed(futures):
-                out.append(future.result())
+            for future in concurrent.futures.as_completed(futures, timeout=per_claim_timeout * len(claims) + 120):
+                try:
+                    out.append(future.result(timeout=per_claim_timeout))
+                except Exception as exc:
+                    logger.warning("Verification future timed out or failed: %s", exc)
         # Preserve deterministic order by claim_id appearance order
         order = {claim.id: idx for idx, claim in enumerate(claims)}
         out.sort(key=lambda item: order.get(item.claim_id, 10_000))

@@ -36,7 +36,7 @@ def test_ingest_verified_claim_sets_expected_priors():
     assert graph.nodes[node_refuted_exp].prior < 0.1
     # Lean (formal) refutation DOES hard-refute
     assert graph.nodes[node_refuted_lean].state == "refuted"
-    assert graph.nodes[node_refuted_lean].belief == 0.0
+    assert graph.nodes[node_refuted_lean].belief <= 0.01
 
 
 def test_propagate_verification_signals_threshold_trigger():

@@ -1,0 +1,10 @@
+{
+  "suite_id": "hubbard_dse_diagmc_opus",
+  "display_name": "Hubbard DSE-DiagMC (Claude-4.6-opus)",
+  "description": "Discovery Zero on the DSE-DiagMC many-body framework design problem using Claude-4.6-opus.",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/hubbard_dse_diagmc_opus/case.json"
+  ]
+}

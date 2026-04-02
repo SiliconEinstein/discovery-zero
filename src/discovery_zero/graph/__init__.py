@@ -11,7 +11,6 @@ from discovery_zero.graph.models import (
 )
 from discovery_zero.graph.inference import (
     propagate_beliefs,
-    apply_refutation_penalties,
     propagate_verification_signals,
     SignalAccumulator,
 )

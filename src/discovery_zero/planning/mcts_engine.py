@@ -63,7 +63,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MCTSConfig:
     max_iterations: int = 30
-    max_time_seconds: float = 3600.0
+    max_time_seconds: float = 14400.0
+    post_action_budget_seconds: float = 300.0
     c_puct: float = 1.4
     num_simulations_per_expand: int = 3
     enable_evolutionary_experiments: bool = True
@@ -129,6 +130,7 @@ class MCTSDiscoveryEngine:
         backend: str = "bp",
         llm_record_dir: Optional[Path] = None,
         bridge_path: Optional[Path] = None,
+        lean_timeout: Optional[int] = None,
     ) -> None:
         self.graph_path = graph_path
         self.target_node_id = target_node_id
@@ -159,6 +161,11 @@ class MCTSDiscoveryEngine:
             threshold=max(1, int(getattr(_cfg, "bp_propagation_threshold", 1)))
         )
         self.lean_policy: dict[str, Any] = lean_policy or {}
+        self._lean_timeout = int(
+            lean_timeout
+            if lean_timeout is not None
+            else getattr(_cfg, "lean_timeout", 300)
+        )
         self._rmaxts = RMaxTSSearch(
             pav=pav,
             novelty_tracker=self.novelty_tracker,
@@ -216,14 +223,12 @@ class MCTSDiscoveryEngine:
         rolling_feedback = planning_feedback
         iter_budget_seconds = float(os.environ.get("DISCOVERY_ZERO_MCTS_ITER_BUDGET", "0").strip() or "0")
         if iter_budget_seconds <= 0:
+            per_iter = self.config.max_time_seconds / max(self.config.max_iterations, 1)
             iter_budget_seconds = min(
-                max(
-                    (self.config.max_time_seconds / max(self.config.max_iterations, 1)) * 3.0,
-                    1200.0,
-                ),
-                3600.0,
+                max(1800.0, per_iter * 2.0),
+                self.config.max_time_seconds * 0.5,
             )
-        post_action_budget_seconds = 300.0
+        post_action_budget_seconds = float(self.config.post_action_budget_seconds)
         checkpoint_dir = self.graph_path.parent / "action_checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -345,6 +350,11 @@ class MCTSDiscoveryEngine:
             elapsed_after_action = time.monotonic() - iter_start
             remaining_budget = iter_budget_seconds - elapsed_after_action
             skip_optional_followups = remaining_budget < post_action_budget_seconds
+            if (
+                selected_module == Module.PLAUSIBLE
+                and result.best_bridge_plan is None
+            ):
+                skip_optional_followups = False
             if skip_optional_followups:
                 result.steps.append(
                     {
@@ -1021,15 +1031,12 @@ class MCTSDiscoveryEngine:
         # Only run real Lean on structural claims when explicitly enabled by lean_policy
         # AND the bridge confidence is high enough.  For frontier open problems where the
         # target is still unverified, avoid burning Lean time on intermediate claims.
-        enable_lean_claim_verify = (
-            bool(self.lean_policy.get("enable_strict_lean", True))
-            and enable_decomposition
-        )
+        enable_lean_claim_verify = bool(self.lean_policy.get("enable_strict_lean", True))
 
         # ---- 2. Parallel verification ----
         verification_results: list[VerificationResult] = []
         old_style_results = []  # ClaimVerificationResult for legacy update_graph_beliefs
-        decomposed_subclaims: list[Any] = []
+        decomposed_subclaims: list[tuple[str, Any]] = []
 
         max_workers = CONFIG.verification_parallel_workers
 
@@ -1164,15 +1171,16 @@ class MCTSDiscoveryEngine:
         # claims_by_id maps internal claim ID → Claim for lookups after parallel verify.
         claims_by_id: dict[str, Any] = {c.id: c for c in claims}
 
+        per_claim_timeout = float(self._lean_timeout) + 60.0
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_verify_one, claim): claim for claim in claims}
-            for fut in concurrent.futures.as_completed(futures):
+            for fut in concurrent.futures.as_completed(futures, timeout=per_claim_timeout * len(claims) + 120):
                 try:
-                    vr, extra = fut.result()
+                    vr, extra = fut.result(timeout=per_claim_timeout)
                     if vr is not None:
                         verification_results.append(vr)
                         if isinstance(extra, list):
-                            decomposed_subclaims.extend(extra)
+                            decomposed_subclaims.extend((vr.claim_id, sub) for sub in extra)
                         elif extra is not None:
                             # Fix 7: only collect ClaimVerificationResult into
                             # old_style_results when the claim has NO bridge mapping.
@@ -1241,6 +1249,56 @@ class MCTSDiscoveryEngine:
                     exc,
                 )
 
+        decomposed_nodes_ingested = 0
+        decomposed_edges_ingested = 0
+        for parent_claim_id, subclaim in decomposed_subclaims:
+            parent_claim = claims_by_id.get(parent_claim_id)
+            if parent_claim is None:
+                continue
+            parent_node_id: Optional[str] = None
+            if (
+                parent_claim.bridge_proposition_id
+                and bridge_node_map
+                and parent_claim.bridge_proposition_id in bridge_node_map
+            ):
+                parent_node_id = bridge_node_map[parent_claim.bridge_proposition_id]
+            elif self.target_node_id in graph_updated.nodes:
+                parent_node_id = self.target_node_id
+            if parent_node_id is None or parent_node_id not in graph_updated.nodes:
+                continue
+            statement = str(getattr(subclaim, "claim_text", "")).strip()
+            if not statement:
+                continue
+            matches = graph_updated.find_node_ids_by_statement(statement)
+            if matches:
+                sub_node_id = matches[0]
+            else:
+                node = graph_updated.add_node(
+                    statement=statement,
+                    belief=0.5,
+                    prior=0.5,
+                    domain=graph_updated.nodes[parent_node_id].domain,
+                    provenance="lean_decompose",
+                )
+                sub_node_id = node.id
+                decomposed_nodes_ingested += 1
+            already = any(
+                e.edge_type == "decomposition"
+                and e.conclusion_id == parent_node_id
+                and set(e.premise_ids) == {sub_node_id}
+                for e in graph_updated.edges.values()
+            )
+            if not already and sub_node_id != parent_node_id:
+                graph_updated.add_hyperedge(
+                    premise_ids=[sub_node_id],
+                    conclusion_id=parent_node_id,
+                    module=Module.LEAN,
+                    steps=["Lean decomposition-derived subclaim"],
+                    confidence=0.95,
+                    edge_type="decomposition",
+                )
+                decomposed_edges_ingested += 1
+
         # Apply legacy belief updates from ClaimVerifier results for claims
         # that were NOT handled via bridge_node_map (unmapped claims only).
         if old_style_results and self.claim_verifier is not None:
@@ -1249,7 +1307,7 @@ class MCTSDiscoveryEngine:
                 results=old_style_results,
             )
 
-        if ingested > 0:
+        if ingested > 0 or decomposed_nodes_ingested > 0 or decomposed_edges_ingested > 0:
             save_graph(graph_updated, self.graph_path)
 
         # ---- 4. BP signal accumulation ----
@@ -1329,6 +1387,8 @@ class MCTSDiscoveryEngine:
             "claims_ingested": ingested,
             "lean_gaps_identified": len(lean_feedback_parts),
             "decomposed_subclaims": len(decomposed_subclaims),
+            "decomposed_subclaims_nodes_ingested": decomposed_nodes_ingested,
+            "decomposed_subclaims_edges_ingested": decomposed_edges_ingested,
             "bp_pending_signals": self.signal_accumulator.pending_signals,
             "verification_bonus": round(verification_bonus, 4),
             "summary": "; ".join(
@@ -1606,6 +1666,7 @@ class MCTSDiscoveryEngine:
             graph,
             node_id,
             model=self.model,
+            timeout=self._lean_timeout,
             boundary_policy=boundary_policy,
             prompt_feedback=feedback,
             record_dir=self.llm_record_dir,
@@ -1795,14 +1856,13 @@ class MCTSDiscoveryEngine:
                 payload["normalized"] = followup.normalized_output
             result.steps.append(payload)
 
-        if followups:
-            from discovery_zero.config import CONFIG as _cfg
-            graph_bp = load_graph(self.graph_path)
-            propagate_beliefs(
-                graph_bp,
-                warmstart=(getattr(_cfg, "bp_backend", "gaia") != "gaia_v2"),
-            )
-            save_graph(graph_bp, self.graph_path)
+        from discovery_zero.config import CONFIG as _cfg
+        graph_bp = load_graph(self.graph_path)
+        propagate_beliefs(
+            graph_bp,
+            warmstart=(getattr(_cfg, "bp_backend", "gaia") != "gaia_v2"),
+        )
+        save_graph(graph_bp, self.graph_path)
 
     def _spawn_problem_variants(
         self,

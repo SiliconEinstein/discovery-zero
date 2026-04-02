@@ -366,6 +366,12 @@ def execute_bridge_followups(
         default_domain=graph.nodes[target_node_id].domain,
         target_node_id=target_node_id,
     )
+    from discovery_zero.config import CONFIG as _cfg
+
+    propagate_beliefs(
+        graph,
+        warmstart=(getattr(_cfg, "bp_backend", "gaia") != "gaia_v2"),
+    )
     save_graph(graph, graph_path)
     results: list[ActionResult] = [
         ActionResult(

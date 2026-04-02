@@ -11,17 +11,20 @@ Production-oriented behaviour:
 - Full parsing of Lean/lake output for diagnostics
 
 Concurrency: Concurrent writes to the same Proofs.lean are not safe; no file locking
-is implemented. Single-process / single-writer usage is safe.
+is implemented. The benchmark harness uses ``prepare_benchmark_lean_sandbox`` so each
+run writes to its own ``Proofs.lean`` under ``run_dir/lean_workspace/``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -32,6 +35,7 @@ __all__ = [
     "LeanVerifyResult",
     "get_workspace_path",
     "ensure_workspace",
+    "prepare_benchmark_lean_sandbox",
     "init_workspace",
     "write_proof_file",
     "run_lake_build",
@@ -197,7 +201,6 @@ def _run_cmd(
     """
     if stream:
         print(f"Running lake build in {cwd} ...", flush=True)
-        # Inherit stdout/stderr so lake gets a real TTY and shows progress
         proc = subprocess.Popen(
             cmd,
             cwd=cwd,
@@ -205,22 +208,38 @@ def _run_cmd(
             stderr=None,
             stdin=subprocess.DEVNULL,
             env={**subprocess.os.environ},
+            start_new_session=True,
         )
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError:
+                proc.kill()
+            proc.wait(timeout=10)
             raise
         return subprocess.CompletedProcess(cmd, proc.returncode or 0, None, None)
-    return subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=cwd,
-        timeout=timeout,
-        capture_output=capture_output,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        stdin=subprocess.DEVNULL,
         text=True,
         env={**subprocess.os.environ},
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, 9)
+        except OSError:
+            proc.kill()
+        stdout, stderr = proc.communicate(timeout=10)
+        raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(cmd, proc.returncode or 0, stdout, stderr)
 
 
 def init_workspace(
@@ -335,6 +354,82 @@ def ensure_workspace(
     if not base.exists() or not (base / "lakefile.toml").exists():
         init_workspace(base, force=False)
     return base
+
+
+def prepare_benchmark_lean_sandbox(template: Path, sandbox: Path) -> Path:
+    """
+    Create an isolated Lean workspace for a benchmark run.
+
+    Copies ``lakefile.toml``, ``lean-toolchain``, optional ``lake-manifest.json``,
+    and ``Discovery/Discovery/{Main,Proofs}.lean`` from ``template``. Symlinks
+    ``template/.lake/packages`` into the sandbox when present so Mathlib does not
+    need to be re-fetched; ``lake build`` writes Discovery artifacts only under
+    ``sandbox/.lake/build``.
+
+    Args:
+        template: A workspace that already has ``lakefile.toml`` and Lean sources.
+        sandbox: Destination root; must not exist yet (e.g. ``run_dir / "lean_workspace"``).
+
+    Returns:
+        Resolved ``sandbox`` path.
+
+    Raises:
+        FileExistsError: If ``sandbox`` already exists.
+        FileNotFoundError: If ``template`` is missing required files.
+    """
+    template = template.resolve()
+    sandbox = sandbox.resolve()
+    if sandbox.exists():
+        raise FileExistsError(f"Lean sandbox already exists: {sandbox}")
+    lakefile = template / "lakefile.toml"
+    toolchain = template / "lean-toolchain"
+    main_src = template / MAIN_FILE
+    proofs_src = template / PROOFS_FILE
+    for path, label in (
+        (lakefile, "lakefile.toml"),
+        (toolchain, "lean-toolchain"),
+        (main_src, MAIN_FILE),
+        (proofs_src, PROOFS_FILE),
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(f"Lean template missing {label}: {path}")
+
+    sandbox.mkdir(parents=True)
+    shutil.copy2(lakefile, sandbox / "lakefile.toml")
+    shutil.copy2(toolchain, sandbox / "lean-toolchain")
+    manifest = template / "lake-manifest.json"
+    if manifest.is_file():
+        shutil.copy2(manifest, sandbox / "lake-manifest.json")
+
+    rel_discovery = Path("Discovery") / "Discovery"
+    dest_discovery = sandbox / rel_discovery
+    dest_discovery.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(main_src, dest_discovery / "Main.lean")
+    shutil.copy2(proofs_src, dest_discovery / "Proofs.lean")
+
+    lake_dir = sandbox / ".lake"
+    lake_dir.mkdir(parents=True, exist_ok=True)
+    template_packages = template / ".lake" / "packages"
+    dest_packages = lake_dir / "packages"
+    if template_packages.is_dir():
+        try:
+            os.symlink(template_packages.resolve(), dest_packages, target_is_directory=True)
+        except OSError as exc:
+            raise RuntimeError(
+                "Could not symlink template .lake/packages into sandbox; "
+                "symlinks are required for shared Mathlib (e.g. run on Linux or "
+                "enable Windows Developer Mode). "
+                f"template={template}, err={exc}"
+            ) from exc
+    else:
+        logger.warning(
+            "Template workspace has no .lake/packages; first lake build in sandbox "
+            "may download Mathlib. Consider running `lake build` in %s first.",
+            template,
+        )
+
+    logger.info("Prepared isolated Lean sandbox at %s (template=%s)", sandbox, template)
+    return sandbox
 
 
 def write_proof_file(
@@ -711,7 +806,8 @@ def decompose_proof_skeleton(
     """
     base = ensure_workspace(workspace_path)
     transformed = _rewrite_sorry_to_placeholders(lean_code)
-    relative_file = "Discovery/Discovery/PartialGoals.lean"
+    unique_suffix = uuid.uuid4().hex[:8]
+    relative_file = f"Discovery/Discovery/PartialGoals_{unique_suffix}.lean"
     target = base / relative_file
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(transformed, encoding="utf-8")

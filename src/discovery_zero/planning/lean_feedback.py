@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -143,10 +144,22 @@ class StructuralClaimRouter:
         max_decompose_depth: int = 4,
         structural_complexity_threshold: int = 2,
         decompose_engine: Optional[DecomposeEngine] = None,
+        workspace_path: Optional[Path] = None,
+        decompose_timeout: int = 120,
+        verify_timeout: int = 180,
     ) -> None:
         self.max_decompose_depth = max_decompose_depth
         self.structural_complexity_threshold = structural_complexity_threshold
         self.decompose_engine = decompose_engine or DecomposeEngine()
+        self.workspace_path = workspace_path
+        self.decompose_timeout = int(decompose_timeout)
+        self.verify_timeout = int(verify_timeout)
+
+    def _effective_workspace_path(self) -> Optional[Path]:
+        env_ws = os.environ.get("DISCOVERY_ZERO_LEAN_WORKSPACE", "").strip()
+        if env_ws:
+            return Path(env_ws)
+        return self.workspace_path
 
     def assess_complexity(self, claim: Claim) -> Literal["simple", "complex"]:
         text = claim.claim_text
@@ -225,7 +238,11 @@ class StructuralClaimRouter:
         if record_dir is not None:
             skeleton_path = record_dir / f"structural_decompose_skeleton_{decompose_index}.lean"
             skeleton_path.write_text(raw_code, encoding="utf-8")
-        result = decompose_proof_skeleton(raw_code, timeout=120)
+        result = decompose_proof_skeleton(
+            raw_code,
+            workspace_path=self._effective_workspace_path(),
+            timeout=self.decompose_timeout,
+        )
         subclaims: list[Claim] = []
         for goal in result.goals:
             target = (goal.target or "").strip()
@@ -247,7 +264,7 @@ class StructuralClaimRouter:
         self,
         claim: Claim,
         *,
-        timeout: int = 180,
+        timeout: Optional[int] = None,
         model: Optional[str] = None,
         context: str = "",
         record_dir: Optional[Path] = None,
@@ -294,5 +311,9 @@ class StructuralClaimRouter:
         if record_dir is not None:
             code_path = record_dir / f"structural_verify_code_{claim_index}.lean"
             code_path.write_text(lean_code, encoding="utf-8")
-        result = verify_proof(lean_code, timeout=timeout)
+        result = verify_proof(
+            lean_code,
+            workspace_path=self._effective_workspace_path(),
+            timeout=int(timeout if timeout is not None else self.verify_timeout),
+        )
         return result.success, (result.error_message or "")

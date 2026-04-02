@@ -1,0 +1,73 @@
+{
+  "model": "cds/Claude-4.6-opus",
+  "domain": "computational condensed matter physics / many-body theory",
+  "lean_workspace": null,
+  "lean_boundary_policy": null,
+  "seed_nodes": [
+    {
+      "key": "hubbard_model",
+      "statement": "The Fermi-Hubbard model on a D-dimensional lattice is H = -t sum_{<ij>,sigma} (c^dag_{i,sigma} c_{j,sigma} + h.c.) + U sum_i n_{i,up} n_{i,down} - mu sum_i n_i, where t is the nearest-neighbor hopping, U is the on-site Coulomb repulsion, and mu is the chemical potential. On the 2D square lattice, the dispersion is epsilon_k = -2t(cos k_x + cos k_y). At half-filling (mu = U/2 by particle-hole symmetry, or mu = 0 in the symmetric convention), the model has an antiferromagnetic ground state at large U/t and a Fermi liquid at small U/t, with a crossover/Mott transition at intermediate coupling. The single-particle Green's function G(k, i*omega_n) = 1/(i*omega_n + mu - epsilon_k - Sigma(k, i*omega_n)) is fully determined by the self-energy Sigma. Computing Sigma accurately at finite temperature for arbitrary U/t and filling is the central computational challenge.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "condensed matter physics"
+    },
+    {
+      "key": "dyson_schwinger_equations",
+      "statement": "The Dyson-Schwinger equation (DSE) for the Hubbard model expresses the self-energy as an exact functional of the Green's function: Sigma[G] = U*n_{-sigma} - U * integral G(1,3) * Gamma(3,2;4) * G(4,1^+) d3 d4, where Gamma is the irreducible vertex function satisfying its own DSE: Gamma = delta_Sigma/delta_G (the functional derivative). This creates an infinite hierarchy. Truncation at the M-th iteration of the recursion Sigma^{(k+1)} = U*G - U*G*(delta_Sigma^{(k)}/delta_G)*G generates contributions from all perturbative orders, but with partial resummation built in through the vertex feedback. This is fundamentally different from selecting Feynman diagrams order by order. The functional derivative delta_Sigma/delta_G can be computed exactly via forward-mode automatic differentiation (dual numbers or Taylor-mode AD), treating G as the independent variable.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "quantum field theory"
+    },
+    {
+      "key": "cdet_baseline_and_limitations",
+      "statement": "Connected Determinant Diagrammatic Monte Carlo (CDet) computes perturbative contributions to the self-energy by stochastically sampling connected Feynman diagrams. At order n, the number of topologically distinct diagrams grows factorially as O(n!). CDet handles this by expressing the sum over all order-n connected diagrams as a single n-by-n determinant of a propagator matrix, avoiding explicit enumeration. The sign problem manifests as cancellations between positive and negative determinant contributions, causing the signal-to-noise ratio to degrade exponentially with order n. Current CDet implementations can reach approximately n = 10-12 for the 2D Hubbard model. At strong coupling (U/t >= 4) and low temperature, the sign problem and slow series convergence severely limit accuracy. CDet data for Im Sigma(k, i*omega_0) at U/t = 6.0 (delta = 0.087) shows relative errors of 10-20% at T/t = 0.1, indicating the practical frontier of the method.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "computational physics"
+    },
+    {
+      "key": "tensor_contraction_structure",
+      "statement": "Each Feynman diagram corresponds to a tensor contraction network: propagators G(i,j) are rank-2 tensors (matrix elements between space-time vertices), the bare interaction U is a local rank-4 tensor (diagonal in space, delta-function in time), and the self-energy Sigma(i,j) and vertex function Gamma(i,j;k,l) are rank-2 and rank-4 tensors respectively. For D vertices in the DSE matrix formulation, the vertex delta_Sigma/delta_G is a D^2 x D^2 matrix (reshaping the rank-4 structure), and the Fock-type contraction Sigma_Fock[i,j] = U * sum_{a,b} G[i,a] * (delta_Sigma/delta_G)[a*D+b, c*D+i] * G[b,j] has naive complexity O(D^5) with precomputation. The contraction order, sparsity exploitation, and possible low-rank approximations of the vertex are key algorithmic design choices that determine computational cost.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "computational physics"
+    },
+    {
+      "key": "mcmc_sampling_theory",
+      "statement": "Markov chain Monte Carlo (MCMC) estimates high-dimensional integrals by sampling configurations from a target distribution. Metropolis-Hastings requires only the ratio of target densities at proposed and current configurations. For diagrammatic calculations, the configuration space consists of space-time vertex positions (and possibly the number of vertices). Two main paradigms: (1) Fixed-order MCMC with heat-bath or Metropolis updates of vertex positions, where multiple independent configurations (walkers) can be trivially parallelized; (2) Variable-order (trans-dimensional) MCMC such as reversible-jump MCMC (RJMCMC), which adds/removes vertices with acceptance ratios involving Jacobian factors from the dimension change. The efficiency depends critically on the proposal distribution: star-graph importance sampling (concentrating vertices near a reference point) can dramatically reduce variance. Batched evaluation of many walkers simultaneously maps naturally onto GPU SIMT architecture.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "computational statistics"
+    },
+    {
+      "key": "resummation_and_ir_compression",
+      "statement": "Perturbative series in U for Sigma are generically divergent (zero radius of convergence) for the Hubbard model, but are asymptotic. Resummation methods extract physical values from the divergent series: (a) Pade approximants [L/M] construct rational functions matching the first L+M+1 coefficients; (b) conformal mapping transforms the Borel plane to improve convergence domain; (c) for particle-hole symmetric (half-filling) cases, Sigma is an odd function of U, enabling Pade in U^2 for improved stability. The Intermediate Representation (IR) basis (Shinaoka et al.) provides an optimal compression of imaginary-time Green's functions: the number of basis functions scales as O(log(beta * omega_max)), compressing thousands of tau/Matsubara grid points to ~20-30 coefficients. This enables efficient storage, interpolation, and Fourier transform between tau and Matsubara domains.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "mathematical physics"
+    },
+    {
+      "key": "hpc_architecture_requirements",
+      "statement": "Production many-body computation requires hierarchical parallelism: (1) MPI-level: distribute independent Monte Carlo chains across nodes, with periodic reduction for error estimation and load balancing; (2) Thread-level: parallelize within a chain via batched walker evaluation or domain decomposition of the lattice momentum grid; (3) GPU-level: the DSE tensor contraction for a batch of B walkers with D vertices requires O(B * D^5) FLOPs with O(B * D^4) memory, mapping onto GPU warp-level parallelism with struct-of-arrays (SoA) memory layout for coalesced access. Rust's ownership model and zero-cost abstractions provide memory safety without runtime overhead; the ecosystem includes MPI bindings (rsmpi), GPU compute (wgpu-compute, cuda-sys), and SIMD intrinsics (std::arch). The key architectural constraint: all hot-path data structures must be stack-allocated or arena-allocated with no garbage collection pauses.",
+      "belief": 1.0,
+      "state": "proven",
+      "domain": "high-performance computing"
+    }
+  ],
+  "target": {
+    "key": "dse_manybody_framework",
+    "statement": "Design and specify the complete algorithmic architecture for a Rust-based many-body computation framework that: (1) computes the self-energy Sigma(k, i*omega_n) of the Fermi-Hubbard model (and extensible to other lattice models) at arbitrary filling, coupling U/t, and temperature T via DSE recursion with automatic differentiation, avoiding explicit Feynman diagram enumeration; (2) implements an efficient MCMC sampling strategy (the specific choice — RJMCMC, heat-bath many-configuration, or hybrid — is to be determined by analysis) for the space-time vertex configurations, with importance sampling to control variance; (3) includes appropriate resummation of the perturbative series to extract physical results in the non-perturbative regime; (4) is designed for large-scale parallelism (CPU-MPI across nodes, multi-GPU for batched tensor contractions); (5) reproduces DQMC reference data at half-filling U/t=2 and CDet data at finite doping (U/t=3.5, 6.0) within their reported error bars; (6) demonstrates superior scaling in the strong-coupling/low-temperature regime where CDet error bars exceed 10%.",
+    "belief": 0.1,
+    "state": "unverified",
+    "domain": "computational condensed matter physics"
+  },
+  "planning_constraints": [
+    "DSE truncation at iteration M is NOT equivalent to selecting a subset of Feynman diagrams at order M; it includes partial resummations of all orders through the functional derivative feedback.",
+    "The method must handle arbitrary band filling and coupling strength, not only half-filling. Particle-hole symmetry is an optional optimization, not a structural assumption.",
+    "Any numerical prediction must include a quantitative error estimate.",
+    "Do not assume the perturbative series in U converges; resummation is generally required.",
+    "The MCMC sampling strategy is an open design choice to be determined by efficiency analysis.",
+    "The computational architecture must support MPI + multi-GPU parallelism. Algorithmic choices that preclude efficient parallelization are excluded.",
+    "The functional derivative delta_Sigma/delta_G scales as D^4 in storage. Strategies to control this must be explicitly addressed."
+  ]
+}

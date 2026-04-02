@@ -13,6 +13,7 @@ from discovery_zero.tools.lean import (
     get_skill_root,
     ensure_workspace,
     init_workspace,
+    prepare_benchmark_lean_sandbox,
     write_proof_file,
     parse_lean_error,
     verify_proof,
@@ -62,6 +63,39 @@ class TestInitWorkspace:
         content = (base / "lakefile.toml").read_text()
         assert "old" not in content
         assert "mathlib" in content.lower()
+
+
+class TestPrepareBenchmarkLeanSandbox:
+    def test_copies_config_and_symlinks_packages(self, tmp_graph_dir):
+        template = tmp_graph_dir / "tpl"
+        init_workspace(template)
+        (template / ".lake").mkdir(exist_ok=True)
+        (template / ".lake" / "packages").mkdir(parents=True)
+        (template / ".lake" / "packages" / "stub.txt").write_text("ok")
+        sandbox = tmp_graph_dir / "sandbox"
+        out = prepare_benchmark_lean_sandbox(template, sandbox)
+        assert out == sandbox.resolve()
+        assert (sandbox / "lakefile.toml").exists()
+        assert (sandbox / "Discovery" / "Discovery" / "Proofs.lean").exists()
+        link = sandbox / ".lake" / "packages"
+        assert link.is_symlink()
+        assert (link / "stub.txt").read_text() == "ok"
+
+    def test_raises_if_sandbox_exists(self, tmp_graph_dir):
+        template = tmp_graph_dir / "tpl"
+        sandbox = tmp_graph_dir / "sandbox"
+        init_workspace(template)
+        sandbox.mkdir()
+        with pytest.raises(FileExistsError):
+            prepare_benchmark_lean_sandbox(template, sandbox)
+
+    def test_raises_if_template_incomplete(self, tmp_graph_dir):
+        template = tmp_graph_dir / "tpl"
+        template.mkdir()
+        (template / "lakefile.toml").write_text("x")
+        sandbox = tmp_graph_dir / "sandbox"
+        with pytest.raises(FileNotFoundError):
+            prepare_benchmark_lean_sandbox(template, sandbox)
 
 
 class TestEnsureWorkspace:

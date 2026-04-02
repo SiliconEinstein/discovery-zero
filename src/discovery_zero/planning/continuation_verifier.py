@@ -15,6 +15,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from libs.inference_v2.factor_graph import CROMWELL_EPS
+
 from discovery_zero.planning.bridge import BridgePlan
 from discovery_zero.tools.llm import chat_completion, extract_text_content
 
@@ -137,7 +139,7 @@ class ContinuationVerifier:
         )
 
     def calibrated_belief(self, *, prior: float, consistency: float) -> float:
-        prior = max(1e-4, min(1 - 1e-4, float(prior)))
+        prior = max(CROMWELL_EPS, min(1.0 - CROMWELL_EPS, float(prior)))
         consistency = max(0.0, min(1.0, float(consistency)))
         logit = math.log(prior / (1.0 - prior))
         adjusted = logit + 2.0 * (consistency - 0.5)

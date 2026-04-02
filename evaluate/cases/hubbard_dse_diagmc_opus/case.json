@@ -1,0 +1,31 @@
+{
+  "case_id": "hubbard_dse_diagmc_opus",
+  "display_name": "DSE-DiagMC 多体计算框架设计与实现 (Opus)",
+  "source_proof_config": "../hubbard_dse_diagmc/proof_config.json",
+  "benchmark_scope": "Design and architect a general-purpose many-body computation framework based on Dyson-Schwinger equation recursion, tensor operations, and Markov chain Monte Carlo sampling. The framework must: (a) compute the single-particle self-energy Sigma(k, i*omega_n) for the Fermi-Hubbard model at arbitrary filling, coupling strength, and temperature; (b) surpass connected determinant diagrammatic Monte Carlo (CDet) in efficiency by avoiding explicit Feynman diagram enumeration; (c) be implementable as a production-grade Rust codebase supporting CPU-MPI and multi-GPU parallelism. Validation target: reproduce DQMC reference data for the 2D square-lattice Hubbard model at half-filling (U/t=2) and CDet data at finite doping (U/t=3.5 delta=0.043; U/t=6.0 delta=0.087), with quantitative agreement within error bars.",
+  "tags": ["physics", "condensed-matter", "many-body", "computational", "diagrammatic-mc", "open-problem", "frontier"],
+  "allow_refutation": true,
+  "model": "cds/Claude-4.6-opus",
+  "timeouts": {
+    "experiment": 300,
+    "decompose": 240,
+    "lean": 360
+  },
+  "lean_policy": {
+    "mode": "selective",
+    "enable_decomposition": true,
+    "enable_strict_lean": true,
+    "min_path_confidence": 0.60,
+    "max_grade_d_ratio": 0.40,
+    "allowed_strict_modes": ["direct_proof", "lemma"]
+  },
+  "planning_constraints": [
+    "DSE truncation at iteration M is NOT equivalent to selecting a subset of Feynman diagrams at order M; it includes partial resummations of all orders through the functional derivative feedback. Do not conflate the two.",
+    "The method must handle arbitrary band filling (not only half-filling) and arbitrary coupling strength U/t. Do not bake in particle-hole symmetry as a fundamental assumption; treat it as an optional optimization when applicable.",
+    "Any numerical prediction must include a quantitative error estimate. Data without error bars has no scientific meaning.",
+    "Do not assume the perturbative series in U converges; resummation (Pade, conformal mapping, or alternatives) is generally required. The choice of resummation strategy must be justified for each parameter regime.",
+    "The MCMC sampling strategy is an open design choice: reversible-jump MCMC, heat-bath many-configuration sampling, and hybrid schemes are all candidates. The choice must be justified by efficiency analysis, not assumed a priori.",
+    "The computational architecture must be designed for large-scale parallelism from the start: domain decomposition for MPI, batched walker parallelism for GPU. Algorithmic choices that preclude efficient parallelization are excluded.",
+    "The functional derivative delta_Sigma/delta_G is a rank-4 tensor whose storage scales as D^4. Strategies to control this (sparse structure, symmetry reduction, low-rank approximation, or limiting D) must be explicitly addressed."
+  ]
+}

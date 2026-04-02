@@ -120,7 +120,7 @@ class GaiaStorageRetrievalClient:
             return results
 
         try:
-            return asyncio.run(_search_async())
+            return asyncio.run(asyncio.wait_for(_search_async(), timeout=30.0))
         except Exception:
             return []
 
@@ -342,7 +342,7 @@ class HypergraphRetrievalIndex:
             if hasattr(self._embedding_model, "embed"):
                 embedded = self._embedding_model.embed(texts)
                 if inspect.isawaitable(embedded):
-                    embedded = asyncio.run(embedded)
+                    embedded = asyncio.run(asyncio.wait_for(embedded, timeout=30.0))
                 return [list(map(float, row)) for row in embedded]
         if self.config.embedding_api_base:
             client = RemoteEmbeddingClient(

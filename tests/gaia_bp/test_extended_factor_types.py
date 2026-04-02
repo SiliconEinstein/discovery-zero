@@ -15,9 +15,8 @@ def test_conjunction_potential_truth_table():
     fg.add_factor(
         "conj",
         FactorType.CONJUNCTION,
-        premises=["A", "B"],
-        conclusions=["M"],
-        p=1.0 - CROMWELL_EPS,
+        ["A", "B"],
+        "M",
     )
     factor = fg.factors[0]
 
@@ -27,16 +26,16 @@ def test_conjunction_potential_truth_table():
     assert evaluate_potential(factor, {"A": 0, "B": 0, "M": 1}) == pytest.approx(CROMWELL_EPS)
 
 
-def test_soft_implication_truth_table():
+def test_soft_entailment_truth_table():
     fg = FactorGraph()
     fg.add_variable("A", 0.5)
     fg.add_variable("B", 0.5)
     fg.add_factor(
         "soft",
-        FactorType.SOFT_IMPLICATION,
-        premises=["A"],
-        conclusions=["B"],
-        p=0.85,
+        FactorType.SOFT_ENTAILMENT,
+        ["A"],
+        "B",
+        p1=0.85,
         p2=0.7,
     )
     factor = fg.factors[0]
@@ -47,17 +46,17 @@ def test_soft_implication_truth_table():
     assert evaluate_potential(factor, {"A": 0, "B": 1}) == pytest.approx(0.3)
 
 
-def test_soft_implication_requires_supportive_parameters():
+def test_soft_entailment_requires_supportive_parameters():
     fg = FactorGraph()
     fg.add_variable("A", 0.5)
     fg.add_variable("B", 0.5)
-    with pytest.raises(ValueError, match="p1\\+p2>1"):
+    with pytest.raises(ValueError, match="p1 \\+ p2 > 1"):
         fg.add_factor(
             "bad_soft",
-            FactorType.SOFT_IMPLICATION,
-            premises=["A"],
-            conclusions=["B"],
-            p=0.4,
+            FactorType.SOFT_ENTAILMENT,
+            ["A"],
+            "B",
+            p1=0.4,
             p2=0.5,
         )
 
@@ -71,16 +70,15 @@ def test_exact_inference_supports_new_factor_types():
     fg.add_factor(
         "conj",
         FactorType.CONJUNCTION,
-        premises=["A", "B"],
-        conclusions=["M"],
-        p=1.0 - CROMWELL_EPS,
+        ["A", "B"],
+        "M",
     )
     fg.add_factor(
         "soft",
-        FactorType.SOFT_IMPLICATION,
-        premises=["M"],
-        conclusions=["C"],
-        p=0.92,
+        FactorType.SOFT_ENTAILMENT,
+        ["M"],
+        "C",
+        p1=0.92,
         p2=0.55,
     )
 

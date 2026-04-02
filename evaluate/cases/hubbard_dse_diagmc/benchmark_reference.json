@@ -1,0 +1,229 @@
+{
+  "_description": "Benchmark reference data for 2D square-lattice Fermi-Hubbard model self-energy. All data points include error estimates. Sources: Figure3.png (DQMC, half-filling U/t=2) and CDet_selfenergy_Ccenter_Nnode.png (CDet, finite doping).",
+  "_notes": [
+    "DQMC half-filling data: approximate values extracted from Figure3.png DQMC panels; DQMC has no fermion sign problem at half-filling so errors are small.",
+    "CDet doped data: extracted from CDet_selfenergy_Ccenter_Nnode.png with visible error bars.",
+    "All energies in units of hopping t=1. Matsubara frequencies omega_n = (2n-1)*pi/beta.",
+    "k-points: AN = antinodal (pi, 0), N = nodal (pi/2, pi/2), C = center/zone-corner momentum."
+  ],
+
+  "half_filling_U2": {
+    "description": "2D Hubbard, U/t=2, half-filling (mu=0), DQMC reference",
+    "model": "2D_square_hubbard",
+    "U_over_t": 2.0,
+    "filling": "half",
+    "delta": 0.0,
+    "lattice": "square",
+    "source": "DQMC (Figure3.png right panels)",
+    "observable": "Im_Sigma_k_iwn",
+    "k_points": {
+      "AN": {"kx_over_pi": 1.0, "ky_over_pi": 0.0, "label": "antinodal"},
+      "N":  {"kx_over_pi": 0.5, "ky_over_pi": 0.5, "label": "nodal"}
+    },
+    "data": [
+      {
+        "T_over_t": 1.0,
+        "beta_t": 1.0,
+        "AN": {
+          "omega_n": [3.14],
+          "Im_Sigma": [{"value": -0.060, "error": 0.005}]
+        },
+        "N": {
+          "omega_n": [3.14],
+          "Im_Sigma": [{"value": -0.050, "error": 0.005}]
+        }
+      },
+      {
+        "T_over_t": 0.33,
+        "beta_t": 3.0,
+        "AN": {
+          "omega_n": [1.05, 3.14],
+          "Im_Sigma": [
+            {"value": -0.100, "error": 0.005},
+            {"value": -0.070, "error": 0.005}
+          ]
+        },
+        "N": {
+          "omega_n": [1.05, 3.14],
+          "Im_Sigma": [
+            {"value": -0.085, "error": 0.005},
+            {"value": -0.065, "error": 0.005}
+          ]
+        }
+      },
+      {
+        "T_over_t": 0.1,
+        "beta_t": 10.0,
+        "AN": {
+          "omega_n": [0.31, 0.94, 1.57, 2.20, 2.83],
+          "Im_Sigma": [
+            {"value": -0.120, "error": 0.005},
+            {"value": -0.115, "error": 0.005},
+            {"value": -0.105, "error": 0.005},
+            {"value": -0.095, "error": 0.005},
+            {"value": -0.085, "error": 0.005}
+          ]
+        },
+        "N": {
+          "omega_n": [0.31, 0.94, 1.57, 2.20, 2.83],
+          "Im_Sigma": [
+            {"value": -0.125, "error": 0.005},
+            {"value": -0.118, "error": 0.005},
+            {"value": -0.108, "error": 0.005},
+            {"value": -0.098, "error": 0.005},
+            {"value": -0.088, "error": 0.005}
+          ]
+        }
+      },
+      {
+        "T_over_t": 0.065,
+        "beta_t": 15.38,
+        "AN": {
+          "omega_n": [0.204, 0.613, 1.022, 1.431, 1.840, 2.249],
+          "Im_Sigma": [
+            {"value": -0.130, "error": 0.005},
+            {"value": -0.125, "error": 0.005},
+            {"value": -0.115, "error": 0.005},
+            {"value": -0.105, "error": 0.005},
+            {"value": -0.095, "error": 0.005},
+            {"value": -0.088, "error": 0.005}
+          ]
+        },
+        "N": {
+          "omega_n": [0.204, 0.613, 1.022, 1.431, 1.840, 2.249],
+          "Im_Sigma": [
+            {"value": -0.140, "error": 0.005},
+            {"value": -0.130, "error": 0.005},
+            {"value": -0.120, "error": 0.005},
+            {"value": -0.110, "error": 0.005},
+            {"value": -0.100, "error": 0.005},
+            {"value": -0.092, "error": 0.005}
+          ]
+        }
+      },
+      {
+        "T_over_t": 0.063,
+        "beta_t": 15.87,
+        "AN": {
+          "omega_n": [0.198, 0.594, 0.990, 1.387, 1.783],
+          "Im_Sigma": [
+            {"value": -0.132, "error": 0.006},
+            {"value": -0.126, "error": 0.005},
+            {"value": -0.116, "error": 0.005},
+            {"value": -0.106, "error": 0.005},
+            {"value": -0.096, "error": 0.005}
+          ]
+        },
+        "N": {
+          "omega_n": [0.198, 0.594, 0.990, 1.387, 1.783],
+          "Im_Sigma": [
+            {"value": -0.142, "error": 0.006},
+            {"value": -0.132, "error": 0.005},
+            {"value": -0.121, "error": 0.005},
+            {"value": -0.111, "error": 0.005},
+            {"value": -0.101, "error": 0.005}
+          ]
+        }
+      }
+    ]
+  },
+
+  "doped_U3p5_delta0p043": {
+    "description": "2D Hubbard, U/t=3.5, hole doping delta=0.043, CDet reference",
+    "model": "2D_square_hubbard",
+    "U_over_t": 3.5,
+    "filling": "doped",
+    "delta": 0.043,
+    "lattice": "square",
+    "source": "CDet (CDet_selfenergy_Ccenter_Nnode.png left panel)",
+    "observable": "Im_Sigma_k_iw0",
+    "k_points": {
+      "C": {"label": "center momentum"},
+      "N": {"label": "nodal (pi/2, pi/2)"}
+    },
+    "data": [
+      {
+        "T_over_t": 0.10,
+        "C": {"value": -0.50, "error": 0.02},
+        "N": {"value": -0.45, "error": 0.01}
+      },
+      {
+        "T_over_t": 0.125,
+        "C": {"value": -0.37, "error": 0.01},
+        "N": {"value": -0.32, "error": 0.01}
+      },
+      {
+        "T_over_t": 0.15,
+        "C": {"value": -0.33, "error": 0.01},
+        "N": {"value": -0.30, "error": 0.01}
+      },
+      {
+        "T_over_t": 0.175,
+        "C": {"value": -0.30, "error": 0.01},
+        "N": {"value": -0.28, "error": 0.005}
+      },
+      {
+        "T_over_t": 0.20,
+        "C": {"value": -0.29, "error": 0.01},
+        "N": {"value": -0.28, "error": 0.005}
+      },
+      {
+        "T_over_t": 0.25,
+        "C": {"value": -0.31, "error": 0.01},
+        "N": {"value": -0.30, "error": 0.005}
+      }
+    ]
+  },
+
+  "doped_U6_delta0p087": {
+    "description": "2D Hubbard, U/t=6.0, hole doping delta=0.087, CDet reference. Note: large error bars at low T indicate CDet reaching its practical limits at strong coupling.",
+    "model": "2D_square_hubbard",
+    "U_over_t": 6.0,
+    "filling": "doped",
+    "delta": 0.087,
+    "lattice": "square",
+    "source": "CDet (CDet_selfenergy_Ccenter_Nnode.png right panel)",
+    "observable": "Im_Sigma_k_iw0",
+    "k_points": {
+      "C": {"label": "center momentum"},
+      "N": {"label": "nodal (pi/2, pi/2)"}
+    },
+    "data": [
+      {
+        "T_over_t": 0.08,
+        "C": {"value": -1.35, "error": 0.20},
+        "N": {"value": -0.45, "error": 0.05}
+      },
+      {
+        "T_over_t": 0.10,
+        "C": {"value": -1.30, "error": 0.15},
+        "N": {"value": -0.55, "error": 0.05}
+      },
+      {
+        "T_over_t": 0.125,
+        "C": {"value": -1.20, "error": 0.10},
+        "N": {"value": -0.65, "error": 0.04}
+      },
+      {
+        "T_over_t": 0.15,
+        "C": {"value": -1.15, "error": 0.10},
+        "N": {"value": -0.80, "error": 0.03}
+      },
+      {
+        "T_over_t": 0.175,
+        "C": {"value": -1.10, "error": 0.08},
+        "N": {"value": -0.85, "error": 0.03}
+      },
+      {
+        "T_over_t": 0.20,
+        "C": {"value": -1.10, "error": 0.08},
+        "N": {"value": -0.90, "error": 0.03}
+      },
+      {
+        "T_over_t": 0.25,
+        "C": {"value": -1.10, "error": 0.05},
+        "N": {"value": -0.95, "error": 0.03}
+      }
+    ]
+  }
+}

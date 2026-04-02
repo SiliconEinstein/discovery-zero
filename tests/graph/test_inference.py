@@ -2,9 +2,10 @@
 
 import pytest
 from discovery_zero.config import CONFIG
+from discovery_zero.graph.adapter import InferenceResult
 from discovery_zero.graph.models import HyperGraph, Module
 from discovery_zero.graph.inference import (
-    apply_refutation_penalties,
+    _bp_marginal_should_warn_outside_cromwell,
     propagate_beliefs,
     run_inference_v2,
 )
@@ -28,7 +29,7 @@ class TestGaiaBPPropagation:
     def test_multi_premise_edge(self):
         """Multi-premise with strong premises, strong confidence, neutral prior.
 
-        With SOFT_IMPLICATION ↝(0.85, 0.5) and CONJUNCTION mediator:
+        With SOFT_ENTAILMENT ↝(0.85, 0.5) and CONJUNCTION mediator:
           When mediator is true (premises jointly hold): p₁=0.85 for conclusion.
           When mediator is false: p₂=0.5 (MaxEnt, no information).
         For strong premises (0.95, 0.8), mediator ≈ 0.76.
@@ -47,7 +48,7 @@ class TestGaiaBPPropagation:
     def test_multi_premise_edge_low_prior(self):
         """Multi-premise with strong premises but skeptical prior (0.1).
 
-        With SOFT_IMPLICATION ↝(0.6, 0.5): moderate evidence combined with
+        With SOFT_ENTAILMENT ↝(0.6, 0.5): moderate evidence combined with
         low prior. The posterior is a Bayesian update — it may increase or
         stay near the prior depending on the evidence strength.
         """
@@ -119,41 +120,22 @@ class TestGaiaBPPropagation:
         assert iterations >= 0
 
 
-class TestApplyRefutationPenalties:
-    def test_refutation_penalizes_premises(self):
-        g = HyperGraph()
-        a = g.add_node("premise", belief=0.8, prior=0.8)
-        b = g.add_node("refuted conclusion", belief=0.0, prior=0.0, state="refuted")
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["step"], confidence=0.6)
-        changed = apply_refutation_penalties(g)
-        assert changed > 0
-        assert g.nodes[a.id].belief < 0.8
+class TestCromwellDiagnosticTolerance:
+    def test_no_warn_for_marginal_slightly_above_cromwell_ceiling(self):
+        # Strict band upper is 0.999; BP often returns ~0.9993 — not a real violation.
+        assert not _bp_marginal_should_warn_outside_cromwell(0.9993)
 
-    def test_formal_edges_not_penalized(self):
-        g = HyperGraph()
-        a = g.add_node("premise", belief=0.8, prior=0.8)
-        b = g.add_node("refuted conclusion", belief=0.0, prior=0.0, state="refuted")
-        g.add_hyperedge([a.id], b.id, Module.LEAN, ["formal proof"], confidence=0.99)
-        changed = apply_refutation_penalties(g)
-        assert changed == 0
-        assert g.nodes[a.id].belief == 0.8
+    def test_warn_for_exact_one(self):
+        assert _bp_marginal_should_warn_outside_cromwell(1.0)
 
-    def test_locked_premises_not_penalized(self):
-        g = HyperGraph()
-        a = g.add_node("proven premise", belief=1.0, prior=1.0, state="proven")
-        b = g.add_node("refuted conclusion", belief=0.0, prior=0.0, state="refuted")
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["step"], confidence=0.6)
-        changed = apply_refutation_penalties(g)
-        assert changed == 0
-        assert g.nodes[a.id].belief == 1.0
+    def test_warn_for_exact_zero(self):
+        assert _bp_marginal_should_warn_outside_cromwell(0.0)
 
-    def test_no_refuted_nodes_no_change(self):
-        g = HyperGraph()
-        a = g.add_node("premise", belief=0.8, prior=0.8)
-        b = g.add_node("conclusion", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["step"], confidence=0.6)
-        changed = apply_refutation_penalties(g)
-        assert changed == 0
+    def test_no_warn_interior(self):
+        assert not _bp_marginal_should_warn_outside_cromwell(0.5)
+
+    def test_warn_clearly_above_soft_band(self):
+        assert _bp_marginal_should_warn_outside_cromwell(0.9999)
 
 
 def test_run_inference_v2_filters_synthetic_relation_vars():
@@ -181,3 +163,46 @@ def test_propagate_beliefs_with_gaia_v2_backend(monkeypatch):
     iterations = propagate_beliefs(g)
     assert isinstance(iterations, int)
     assert g.nodes[b.id].belief > 0.2
+
+
+def test_incremental_bp_writes_back_result_node_beliefs(monkeypatch):
+    monkeypatch.setattr(CONFIG, "bp_backend", "gaia")
+    g = HyperGraph()
+    a = g.add_node("A", belief=0.9, prior=0.9)
+    b = g.add_node("B", belief=0.2, prior=0.2)
+    edge = g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["support"], confidence=0.7)
+
+    def _fake_run_gaia_bp(*args, **kwargs):
+        return InferenceResult(
+            node_beliefs={a.id: 0.9, b.id: 0.88},
+            converged=True,
+            iterations=3,
+            diagnostics=None,
+        )
+
+    monkeypatch.setattr("discovery_zero.graph.inference.run_gaia_bp", _fake_run_gaia_bp)
+    iters = propagate_beliefs(g, changed_edge_ids={edge.id}, warmstart=True)
+    assert iters == 3
+    assert g.nodes[b.id].belief == pytest.approx(0.88, abs=1e-6)
+
+
+def test_gaia_v2_path_passes_warmstart_to_run_inference_v2(monkeypatch):
+    monkeypatch.setattr(CONFIG, "bp_backend", "gaia_v2")
+    g = HyperGraph()
+    a = g.add_node("A", belief=0.9, prior=0.9)
+    b = g.add_node("B", belief=0.2, prior=0.2)
+    g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["support"], confidence=0.8)
+    seen: dict[str, bool] = {}
+
+    def _fake_run_inference_v2(graph, *, warmstart=False, config=None):
+        seen["warmstart"] = warmstart
+        return InferenceResult(
+            node_beliefs={a.id: 0.9, b.id: 0.6},
+            converged=True,
+            iterations=2,
+            diagnostics=None,
+        )
+
+    monkeypatch.setattr("discovery_zero.graph.inference.run_inference_v2", _fake_run_inference_v2)
+    propagate_beliefs(g, warmstart=True)
+    assert seen["warmstart"] is True

@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6_gemini2",
+  "display_name": "FirstProof P4 + P6 (Gemini-2.5-Pro, round 2 with BP fixes)",
+  "description": "Discovery Zero FirstProof P4+P6 with Gemini-2.5-Pro after BP semantic fix + timeout hardening.",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4_gemini/case.json",
+    "cases/firstproof_p6_gemini/case.json"
+  ]
+}
