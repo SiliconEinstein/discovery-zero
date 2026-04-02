@@ -102,52 +102,60 @@ def parse_run(run_dir: Path) -> dict:
         info["last_phase_label"] = "(no steps yet)"
         info["timeout_count"] = 0
 
-    # ── snapshots ──
-    snapshots = log.get("snapshots", [])
-    if snapshots:
-        last_snap = snapshots[-1]
-        nodes = last_snap.get("nodes", {})
-        edges = last_snap.get("edges", {})
-        info["node_count"] = len(nodes)
-        info["edge_count"] = len(edges) if isinstance(edges, dict) else (
-            len(edges) if isinstance(edges, list) else 0
-        )
-        # Find target belief by matching the target statement from config.
-        target_belief = None
-        target_stmt = ""
-        cfg_data = _safe_json(run_dir / "resolved_proof_config.json")
-        if cfg_data:
-            t = cfg_data.get("target")
-            if isinstance(t, dict):
-                target_stmt = t.get("statement", "")
-            elif isinstance(t, str):
-                target_stmt = t
-        # 1. Try graph.json with target statement match
-        graph_data = _safe_json(run_dir / "graph.json")
-        if graph_data and target_stmt:
-            for nid, ndata in graph_data.get("nodes", {}).items():
+    # ── graph.json (live) then snapshots (fallback) ──
+    target_stmt = ""
+    cfg_data = _safe_json(run_dir / "resolved_proof_config.json")
+    if cfg_data:
+        t = cfg_data.get("target")
+        if isinstance(t, dict):
+            target_stmt = t.get("statement", "")
+        elif isinstance(t, str):
+            target_stmt = t
+
+    graph_data = _safe_json(run_dir / "graph.json")
+    target_belief = None
+
+    if graph_data:
+        g_nodes = graph_data.get("nodes", {})
+        g_edges = graph_data.get("edges", {})
+        info["node_count"] = len(g_nodes)
+        info["edge_count"] = len(g_edges)
+        if target_stmt:
+            for nid, ndata in g_nodes.items():
                 if isinstance(ndata, dict) and ndata.get("statement", "").startswith(target_stmt[:80]):
                     target_belief = ndata.get("belief")
                     break
-        # 2. Fall back to snapshot with statement match
-        if target_belief is None and target_stmt:
-            for nid, ndata in nodes.items():
-                if isinstance(ndata, dict) and ndata.get("statement", "").startswith(target_stmt[:80]):
-                    target_belief = ndata.get("belief")
-                    break
-        # 3. Last resort: lowest belief among unverified nodes
         if target_belief is None:
-            for nid, ndata in nodes.items():
-                if isinstance(ndata, dict) and ndata.get("state") not in ("proven", "seed"):
+            for nid, ndata in g_nodes.items():
+                if isinstance(ndata, dict) and ndata.get("state") not in ("proven", "refuted"):
                     b = ndata.get("belief")
-                    if b is not None:
-                        if target_belief is None or b < target_belief:
-                            target_belief = b
+                    if b is not None and (target_belief is None or b < target_belief):
+                        target_belief = b
         info["target_belief"] = target_belief
     else:
-        info["node_count"] = 0
-        info["edge_count"] = 0
-        info["target_belief"] = None
+        snapshots = log.get("snapshots", [])
+        if snapshots:
+            last_snap = snapshots[-1]
+            nodes = last_snap.get("nodes", {})
+            edges = last_snap.get("edges", {})
+            info["node_count"] = len(nodes)
+            info["edge_count"] = len(edges) if isinstance(edges, (dict, list)) else 0
+            if target_stmt:
+                for nid, ndata in nodes.items():
+                    if isinstance(ndata, dict) and ndata.get("statement", "").startswith(target_stmt[:80]):
+                        target_belief = ndata.get("belief")
+                        break
+            if target_belief is None:
+                for nid, ndata in nodes.items():
+                    if isinstance(ndata, dict) and ndata.get("state") not in ("proven", "seed"):
+                        b = ndata.get("belief")
+                        if b is not None and (target_belief is None or b < target_belief):
+                            target_belief = b
+            info["target_belief"] = target_belief
+        else:
+            info["node_count"] = 0
+            info["edge_count"] = 0
+            info["target_belief"] = None
 
     # ── bridge_plan.json ──
     info["has_bridge"] = (run_dir / "bridge_plan.json").exists()
@@ -168,48 +176,54 @@ def parse_run(run_dir: Path) -> dict:
     else:
         info["completed"] = False
 
-    # ── llm_records: currently active LLM file ──
-    llm_dir = run_dir / "llm_records"
-    info["llm_active"] = None
-    info["llm_latest"] = None
-    if llm_dir.is_dir():
-        try:
-            now = time.time()
-            latest_file = None
-            latest_mtime = 0
-            for f in llm_dir.iterdir():
-                if not f.is_file():
+    # ── file activity: scan ALL files in run_dir for the most recent change ──
+    now = time.time()
+    latest_file = None
+    latest_mtime = 0.0
+    llm_latest_file = None
+    llm_latest_mtime = 0.0
+    llm_file_count = 0
+
+    try:
+        for dirpath, _dirnames, filenames in os.walk(run_dir):
+            for fname in filenames:
+                fpath = Path(dirpath) / fname
+                try:
+                    mt = fpath.stat().st_mtime
+                except OSError:
                     continue
-                mt = f.stat().st_mtime
                 if mt > latest_mtime:
                     latest_mtime = mt
-                    latest_file = f
-            if latest_file:
-                age = now - latest_mtime
-                sz = latest_file.stat().st_size
-                sz_str = f"{sz/1024:.1f}KB" if sz < 1024 * 1024 else f"{sz/1024/1024:.1f}MB"
-                info["llm_latest"] = {
-                    "name": latest_file.name,
-                    "size": sz_str,
-                    "age_s": int(age),
-                }
-                # If modified within last 5 minutes, it's "active"
-                if age < 300:
-                    info["llm_active"] = info["llm_latest"]
-            # Total LLM call count
-            info["llm_file_count"] = sum(1 for _ in llm_dir.iterdir())
-        except OSError:
-            pass
+                    latest_file = fpath
+                if "llm_records" in dirpath:
+                    llm_file_count += 1
+                    if mt > llm_latest_mtime:
+                        llm_latest_mtime = mt
+                        llm_latest_file = fpath
+    except OSError:
+        pass
 
-    # ── stale detection: is the run actually alive? ──
-    # Check if log or llm_records were updated recently
-    now = time.time()
-    log_mtime = (run_dir / "exploration_log.json").stat().st_mtime
-    freshest = latest_mtime if llm_dir.is_dir() and latest_mtime > 0 else log_mtime
-    freshest = max(freshest, log_mtime)
-    info["seconds_since_update"] = int(now - freshest)
-    # If no update in 30 min and not completed, likely dead
-    if not info.get("completed") and (now - freshest) > 1800:
+    def _file_info(fpath: Path, mtime: float) -> dict:
+        age = now - mtime
+        sz = fpath.stat().st_size
+        sz_str = f"{sz/1024:.1f}KB" if sz < 1024 * 1024 else f"{sz/1024/1024:.1f}MB"
+        rel = str(fpath.relative_to(run_dir))
+        return {"name": rel, "size": sz_str, "age_s": int(age)}
+
+    info["llm_active"] = None
+    info["llm_latest"] = None
+    if llm_latest_file:
+        info["llm_latest"] = _file_info(llm_latest_file, llm_latest_mtime)
+        if (now - llm_latest_mtime) < 300:
+            info["llm_active"] = info["llm_latest"]
+    info["llm_file_count"] = llm_file_count
+
+    info["any_latest"] = None
+    if latest_file:
+        info["any_latest"] = _file_info(latest_file, latest_mtime)
+
+    info["seconds_since_update"] = int(now - latest_mtime) if latest_mtime > 0 else 9999
+    if not info.get("completed") and info["seconds_since_update"] > 1800:
         info["likely_dead"] = True
     else:
         info["likely_dead"] = False
@@ -291,6 +305,19 @@ def format_run(idx: int, info: dict) -> str:
     else:
         flush_str = "?"
     lines.append(f"    Last step: {phase_label} @ {flush_str}")
+
+    # Most recently changed file (any file in the run dir)
+    any_f = info.get("any_latest")
+    if any_f:
+        age = any_f["age_s"]
+        if age < 60:
+            age_str = f"{age}s ago"
+        elif age < 3600:
+            age_str = f"{age // 60}m ago"
+        else:
+            age_str = f"{age // 3600}h{(age % 3600) // 60}m ago"
+        active_marker = ">>>" if age < 120 else "   "
+        lines.append(f"{active_marker} Latest: {any_f['name']} ({any_f['size']}, {age_str})")
 
     # LLM file activity
     llm = info.get("llm_active") or info.get("llm_latest")

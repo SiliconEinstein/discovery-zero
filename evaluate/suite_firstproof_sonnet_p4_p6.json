@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6_sonnet",
+  "display_name": "FirstProof P4 + P6 (Claude-4.5-Sonnet via gpugeek)",
+  "description": "Discovery Zero FirstProof P4+P6 with Claude-4.5-Sonnet. BP fixes + refutation_prior_multiplier=0.3.",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4_sonnet/case.json",
+    "cases/firstproof_p6_sonnet/case.json"
+  ]
+}

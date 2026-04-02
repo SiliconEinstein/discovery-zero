@@ -5,7 +5,7 @@
   "benchmark_scope": "Design and architect a general-purpose many-body computation framework based on Dyson-Schwinger equation recursion, tensor operations, and Markov chain Monte Carlo sampling. The framework must: (a) compute the single-particle self-energy Sigma(k, i*omega_n) for the Fermi-Hubbard model at arbitrary filling, coupling strength, and temperature; (b) surpass connected determinant diagrammatic Monte Carlo (CDet) in efficiency by avoiding explicit Feynman diagram enumeration; (c) be implementable as a production-grade Rust codebase supporting CPU-MPI and multi-GPU parallelism. Validation target: reproduce DQMC reference data for the 2D square-lattice Hubbard model at half-filling (U/t=2) and CDet data at finite doping (U/t=3.5 delta=0.043; U/t=6.0 delta=0.087), with quantitative agreement within error bars.",
   "tags": ["physics", "condensed-matter", "many-body", "computational", "diagrammatic-mc", "open-problem", "frontier"],
   "allow_refutation": true,
-  "model": "cds/Claude-4.6-opus",
+  "model": "Vendor2/Claude-4.6-opus",
   "timeouts": {
     "experiment": 300,
     "decompose": 240,

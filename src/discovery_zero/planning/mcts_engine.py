@@ -1842,6 +1842,7 @@ class MCTSDiscoveryEngine:
                     model=self.model,
                     backend=self.backend,
                     max_rounds=_max_rounds,
+                    record_dir=self.llm_record_dir,
                 )
             except Exception as exc:
                 result.steps.append({"phase": "bridge_consumption", "error": str(exc)})
