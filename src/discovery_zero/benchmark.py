@@ -58,6 +58,7 @@ from discovery_zero.planning.value_net import ProcessAdvantageVerifier
 from discovery_zero.tools.external_prm import ExternalPRM, ExternalPRMConfig
 from discovery_zero.tools.gaia_client import build_gaia_client
 from discovery_zero.tools.retrieval import HypergraphRetrievalIndex, RetrievalConfig
+from discovery_zero.tools.lean import get_workspace_path, prepare_benchmark_lean_sandbox
 
 
 DEFAULT_EVALUATION_ROOT = Path(__file__).resolve().parent.parent.parent / "evaluation"
@@ -256,6 +257,28 @@ def _copy_resolved_config(source_config: dict[str, Any], run_dir: Path, case: Be
     return resolved
 
 
+def _prepare_benchmark_lean_workspace(resolved_config: dict[str, Any], run_dir: Path) -> tuple[Path, bool]:
+    """
+    Resolve the Lean workspace for this benchmark run.
+
+    If ``proof_config`` sets ``lean_workspace``, that path is used as-is (shared;
+    caller may backup/restore ``Proofs.lean``). If it is null, creates
+    ``run_dir / "lean_workspace"`` as an isolated sandbox sharing ``.lake/packages``
+    with the project template from ``get_workspace_path()`` (ignores
+    ``DISCOVERY_ZERO_LEAN_WORKSPACE`` so parallel runs do not nest sandboxes).
+
+    Returns:
+        (workspace_path, should_backup_proofs)
+    """
+    explicit = resolved_config.get("lean_workspace")
+    if explicit:
+        return Path(explicit).resolve(), True
+    sandbox = (run_dir / "lean_workspace").resolve()
+    prepare_benchmark_lean_sandbox(get_workspace_path(), sandbox)
+    resolved_config["lean_workspace"] = str(sandbox)
+    return sandbox, False
+
+
 def _snapshot(graph: HyperGraph, step: str) -> dict[str, Any]:
     return {
         "step": step,
@@ -410,7 +433,9 @@ def should_attempt_lean(
         decomposition_reasons.append("No decomposition bridge plan was selected.")
     if not enable_decomposition:
         attempt_decomposition = False
-        decomposition_reasons.append("Selective Lean policy prefers experiment/replan over decomposition by default.")
+        decomposition_reasons.append(
+            "Lean subgoal decomposition is disabled (lean_policy.enable_decomposition is false)."
+        )
     if not has_strict_target:
         attempt_strict = False
         strict_reasons.append("No strict Lean target proposition was selected.")
@@ -1047,23 +1072,19 @@ def _run_case_once_mcts(
     summary_path = run_dir / "summary.json"
     scorecard_path = run_dir / "PATH_BENCHMARK_SCORECARD_ZH.md"
     llm_record_dir = run_dir / "llm_records"
-    _save_json(resolved_config_path, resolved_config)
+
+    lean_workspace_path, lean_backup_proofs = _prepare_benchmark_lean_workspace(resolved_config, run_dir)
+    os.environ["DISCOVERY_ZERO_LEAN_WORKSPACE"] = str(lean_workspace_path)
 
     model = resolved_config.get("model") or os.environ.get("DISCOVERY_ZERO_LLM_MODEL") or CONFIG.llm_model
     resolved_config["model"] = model
-    if resolved_config.get("lean_workspace"):
-        os.environ["DISCOVERY_ZERO_LEAN_WORKSPACE"] = str(Path(resolved_config["lean_workspace"]).resolve())
+    _save_json(resolved_config_path, resolved_config)
     boundary_policy = resolved_config.get("lean_boundary_policy")
 
     proofs_path: Path | None = None
     backup: str | None = None
-    if resolved_config.get("lean_workspace"):
-        proofs_path = (
-            Path(resolved_config["lean_workspace"]).resolve()
-            / "Discovery"
-            / "Discovery"
-            / "Proofs.lean"
-        )
+    if lean_backup_proofs:
+        proofs_path = lean_workspace_path / "Discovery" / "Discovery" / "Proofs.lean"
         if proofs_path.exists():
             backup = proofs_path.read_text(encoding="utf-8")
 
@@ -1087,6 +1108,7 @@ def _run_case_once_mcts(
             "started_at": _utc_now().isoformat(),
             "llm_record_dir": str(llm_record_dir),
             "engine": "mcts",
+            "lean_workspace": str(lean_workspace_path),
         },
         "steps": [],
         "snapshots": [],
@@ -1189,6 +1211,7 @@ def _run_case_once_mcts(
             backend_name=CONFIG.experiment_backend,
             verification_model=CONFIG.claim_verification_model or None,
             max_claims_per_call=CONFIG.claim_verification_max_claims,
+            lean_verify_timeout=case.timeouts["lean"],
         ) if CONFIG.enable_claim_verifier else None
         analogy_engine = AnalogyEngine() if CONFIG.enable_analogy else None
         specialize_engine = SpecializeEngine() if CONFIG.enable_specialize else None
@@ -1204,6 +1227,9 @@ def _run_case_once_mcts(
             max_decompose_depth=CONFIG.max_decompose_depth,
             structural_complexity_threshold=CONFIG.structural_complexity_threshold,
             decompose_engine=decompose_engine,
+            decompose_timeout=case.timeouts["decompose"],
+            verify_timeout=case.timeouts["lean"],
+            workspace_path=lean_workspace_path,
         ) if CONFIG.lean_feedback_enabled else None
         signal_accumulator = SignalAccumulator(
             threshold=CONFIG.bp_propagation_threshold
@@ -1215,6 +1241,10 @@ def _run_case_once_mcts(
             config=MCTSConfig(
                 max_iterations=CONFIG.mcts_max_iterations,
                 max_time_seconds=CONFIG.mcts_max_time_seconds,
+                post_action_budget_seconds=max(
+                    CONFIG.mcts_post_action_budget_seconds,
+                    float(case.timeouts["lean"]),
+                ),
                 c_puct=CONFIG.mcts_c_puct,
                 num_simulations_per_expand=CONFIG.mcts_num_simulations_per_expand,
                 enable_evolutionary_experiments=CONFIG.enable_evolutionary_experiments,
@@ -1247,6 +1277,7 @@ def _run_case_once_mcts(
             backend="bp",
             llm_record_dir=llm_record_dir,
             bridge_path=bridge_path,
+            lean_timeout=case.timeouts["lean"],
         )
         # Incremental log flush: called at the end of every MCTS iteration.
         # Keeps exploration_log.json up-to-date so partial progress is visible
@@ -1400,23 +1431,19 @@ def run_case_once(
     summary_path = run_dir / "summary.json"
     scorecard_path = run_dir / "PATH_BENCHMARK_SCORECARD_ZH.md"
     llm_record_dir = run_dir / "llm_records"
-    _save_json(resolved_config_path, resolved_config)
+
+    lean_workspace_path, lean_backup_proofs = _prepare_benchmark_lean_workspace(resolved_config, run_dir)
+    os.environ["DISCOVERY_ZERO_LEAN_WORKSPACE"] = str(lean_workspace_path)
 
     model = resolved_config.get("model") or os.environ.get("DISCOVERY_ZERO_LLM_MODEL") or CONFIG.llm_model
     resolved_config["model"] = model
-    if resolved_config.get("lean_workspace"):
-        os.environ["DISCOVERY_ZERO_LEAN_WORKSPACE"] = str(Path(resolved_config["lean_workspace"]).resolve())
+    _save_json(resolved_config_path, resolved_config)
     boundary_policy = resolved_config.get("lean_boundary_policy")
 
     proofs_path: Path | None = None
     backup: str | None = None
-    if resolved_config.get("lean_workspace"):
-        proofs_path = (
-            Path(resolved_config["lean_workspace"]).resolve()
-            / "Discovery"
-            / "Discovery"
-            / "Proofs.lean"
-        )
+    if lean_backup_proofs:
+        proofs_path = lean_workspace_path / "Discovery" / "Discovery" / "Proofs.lean"
         if proofs_path.exists():
             backup = proofs_path.read_text(encoding="utf-8")
 
@@ -1439,6 +1466,7 @@ def run_case_once(
             },
             "started_at": _utc_now().isoformat(),
             "llm_record_dir": str(llm_record_dir),
+            "lean_workspace": str(lean_workspace_path),
         },
         "steps": [],
         "snapshots": [],
@@ -1820,6 +1848,7 @@ def run_case_once(
                         boundary_policy=boundary_policy,
                         max_attempts=3,
                         bridge_plan=bridge_consumption.decomposition_bridge_plan,
+                        record_dir=llm_record_dir,
                     )
                     res_d = ingest_decomposition_output(
                         graph_path,
@@ -2052,9 +2081,10 @@ def run_case_once(
                             record_error("plausible_replan_after_lean", replan_exc)
 
         graph = load_graph(graph_path)
-        propagate_beliefs_energy(graph)
-        save_graph(graph, graph_path)
-        log["snapshots"].append(_snapshot(graph, "after_energy"))
+        if CONFIG.bp_backend == "energy":
+            propagate_beliefs_energy(graph)
+            save_graph(graph, graph_path)
+            log["snapshots"].append(_snapshot(graph, "after_energy"))
         log["metadata"]["finished_at"] = _utc_now().isoformat()
         flush_log()
     finally:
@@ -2512,68 +2542,82 @@ def run_suite(
             _signal.alarm(0)
             _signal.signal(_signal.SIGALRM, previous_handler)
 
-    if max_parallel > 1:
-        with _futures.ThreadPoolExecutor(max_workers=max_parallel) as pool:
-            pending_cases = [c for c in cases if c.case_id not in completed_case_ids]
-            future_to_case = {pool.submit(_run_one_case, c): c for c in pending_cases}
-            for future in _futures.as_completed(future_to_case):
-                case = future_to_case[future]
-                try:
-                    case_results.append(future.result())
-                except Exception as exc:
-                    case_results.append({
-                        "case_id": case.case_id,
-                        "error": str(exc),
-                        "status": "error",
-                    })
-    else:
-        for case in cases:
-            if resume and case.case_id in completed_case_ids:
-                # Try to reload existing result
-                case_dir = suite_run_dir / case.case_id
-                found_summaries: list[dict[str, Any]] = []
-                for run_dir in sorted(case_dir.glob("run_*")) if case_dir.exists() else []:
-                    sp = run_dir / "summary.json"
-                    if sp.exists():
-                        try:
-                            found_summaries.append(json.loads(sp.read_text()))
-                        except Exception:
-                            pass
-                if found_summaries:
-                    case_results.append(aggregate_case_runs(case, found_summaries))
-                    continue
-            try:
-                case_results.append(_run_one_case_with_timeout(case))
-            except TimeoutError as exc:
-                _mark_case_completed(case.case_id)
-                case_results.append(
-                    {
-                        "case_id": case.case_id,
-                        "error": str(exc),
-                        "status": "timeout",
-                    }
-                )
-            except Exception as exc:
-                _mark_case_completed(case.case_id)
-                case_results.append(
-                    {
-                        "case_id": case.case_id,
-                        "error": str(exc),
-                        "status": "error",
-                    }
-                )
+    def _flush_suite_report() -> tuple[Path, Path]:
+        """Generate suite summary and scorecard from whatever results are available."""
+        ss = aggregate_suite_results(
+            suite=suite,
+            cases=cases,
+            case_results=case_results,
+            suite_run_dir=suite_run_dir,
+            actual_repeats=repeats,
+        )
+        sp = reports_dir / "suite_summary.json"
+        sc = reports_dir / "suite_scorecard_zh.md"
+        _save_json(sp, ss)
+        write_suite_scorecard(ss, sc)
+        return sp, sc
 
-    suite_summary = aggregate_suite_results(
-        suite=suite,
-        cases=cases,
-        case_results=case_results,
-        suite_run_dir=suite_run_dir,
-        actual_repeats=repeats,
-    )
     suite_summary_path = reports_dir / "suite_summary.json"
     suite_scorecard_path = reports_dir / "suite_scorecard_zh.md"
-    _save_json(suite_summary_path, suite_summary)
-    write_suite_scorecard(suite_summary, suite_scorecard_path)
+
+    try:
+        if max_parallel > 1:
+            with _futures.ThreadPoolExecutor(max_workers=max_parallel) as pool:
+                pending_cases = [c for c in cases if c.case_id not in completed_case_ids]
+                future_to_case = {pool.submit(_run_one_case, c): c for c in pending_cases}
+                for future in _futures.as_completed(future_to_case):
+                    case = future_to_case[future]
+                    try:
+                        case_results.append(future.result(timeout=default_case_timeout_seconds))
+                    except _futures.TimeoutError:
+                        case_results.append({
+                            "case_id": case.case_id,
+                            "error": f"Case exceeded wall-clock timeout ({default_case_timeout_seconds}s)",
+                            "status": "timeout",
+                        })
+                    except Exception as exc:
+                        case_results.append({
+                            "case_id": case.case_id,
+                            "error": str(exc),
+                            "status": "error",
+                        })
+        else:
+            for case in cases:
+                if resume and case.case_id in completed_case_ids:
+                    case_dir = suite_run_dir / case.case_id
+                    found_summaries: list[dict[str, Any]] = []
+                    for run_dir in sorted(case_dir.glob("run_*")) if case_dir.exists() else []:
+                        sp = run_dir / "summary.json"
+                        if sp.exists():
+                            try:
+                                found_summaries.append(json.loads(sp.read_text()))
+                            except Exception:
+                                pass
+                    if found_summaries:
+                        case_results.append(aggregate_case_runs(case, found_summaries))
+                        continue
+                try:
+                    case_results.append(_run_one_case_with_timeout(case))
+                except TimeoutError as exc:
+                    _mark_case_completed(case.case_id)
+                    case_results.append(
+                        {
+                            "case_id": case.case_id,
+                            "error": str(exc),
+                            "status": "timeout",
+                        }
+                    )
+                except Exception as exc:
+                    _mark_case_completed(case.case_id)
+                    case_results.append(
+                        {
+                            "case_id": case.case_id,
+                            "error": str(exc),
+                            "status": "error",
+                        }
+                    )
+    finally:
+        suite_summary_path, suite_scorecard_path = _flush_suite_report()
 
     # Persist collected experiences when auto-buffer was created.
     if _auto_buffer_save and experience_buffer is not None and len(experience_buffer) > 0:

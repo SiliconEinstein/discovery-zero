@@ -1,0 +1,10 @@
+{
+  "suite_id": "hubbard_dse_diagmc_gemini",
+  "display_name": "Hubbard DSE-DiagMC (Gemini-2.5-Pro)",
+  "description": "Discovery Zero on the DSE-DiagMC many-body framework design problem using Gemini-2.5-Pro.",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/hubbard_dse_diagmc_gemini/case.json"
+  ]
+}

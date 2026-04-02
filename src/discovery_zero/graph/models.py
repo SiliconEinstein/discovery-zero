@@ -54,9 +54,9 @@ class Module(str, Enum):
 class OperatorType(str, Enum):
     """Deprecated: kept for backward compatibility with serialized graphs.
 
-    Per Gaia theory (03-propositional-operators.md §4), all reasoning edges
-    use SOFT_IMPLICATION ↝(p₁, p₂).  The adapter no longer reads this field;
-    it derives p₁ from edge.confidence and p₂ = 0.5 (MaxEnt default).
+    Per Gaia theory (03-propositional-operators.md §4), heuristic edges compile
+    to SOFT_ENTAILMENT ↝(p₁, p₂).  The adapter does not read this field; it
+    maps edge_type + edge.confidence to Gaia factors (see adapter_v2).
     """
 
     ENTAILMENT = "entailment"
@@ -79,7 +79,7 @@ class Node(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     statement: str
     formal_statement: Optional[str] = None
-    belief: float = 0.0
+    belief: float = 0.5
     prior: float = 0.5
     domain: Optional[str] = None
     provenance: Optional[str] = None
@@ -184,7 +184,7 @@ class HyperGraph(BaseModel):
     def add_node(
         self,
         statement: str,
-        belief: float = 0.0,
+        belief: float = 0.5,
         formal_statement: str | None = None,
         domain: str | None = None,
         state: NodeState | None = None,

@@ -270,7 +270,7 @@ def test_summarize_run_records_policy_skip(tmp_graph_dir):
                     "phase": "decomposition",
                     "skipped": True,
                     "skipped_by_policy": True,
-                    "reason": "Selective Lean policy prefers experiment/replan over decomposition by default.",
+                    "reason": "Lean subgoal decomposition is disabled (lean_policy.enable_decomposition is false).",
                     "subgoals": [],
                 },
                 {

@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from libs.inference_v2.factor_graph import CROMWELL_EPS
+
 from discovery_zero.graph.models import HyperGraph
 
 logger = logging.getLogger(__name__)
@@ -105,7 +107,7 @@ def _run_embedding_sync(model: Any, texts: list[str]) -> list[list[float]]:
     if loop is not None and loop.is_running():
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, model.embed(texts)).result()
+            return pool.submit(asyncio.run, model.embed(texts)).result(timeout=60)
     return asyncio.run(model.embed(texts))
 
 
@@ -300,7 +302,7 @@ class NeuralBPCorrector:
     At each BP iteration:
       1. Gaia BP computes standard messages / beliefs.
       2. FG-GNN reads graph features and outputs per-node belief corrections.
-      3. Corrected belief = clip(standard_belief + alpha * correction, 0, 1).
+      3. Corrected belief = clip(standard_belief + alpha * correction, ε, 1-ε).
       4. Corrected beliefs are passed back as warmstart for the next iteration.
 
     When alpha=0 (cold start) this is identical to standard Gaia BP.
@@ -384,7 +386,7 @@ class NeuralBPCorrector:
                 continue
             i = enc.node_index[nid]
             delta = float(corrections[i]) * self.correction_strength
-            corrected[nid] = max(0.0, min(1.0, belief + delta))
+            corrected[nid] = max(CROMWELL_EPS, min(1.0 - CROMWELL_EPS, belief + delta))
 
         return corrected
 

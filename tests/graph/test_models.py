@@ -6,7 +6,7 @@ class TestNode:
     def test_create_node(self):
         node = Node(statement="For all triangles, the angle sum is 180 degrees")
         assert node.statement == "For all triangles, the angle sum is 180 degrees"
-        assert node.belief == 0.0
+        assert node.belief == 0.5
         assert node.id is not None
 
     def test_create_axiom_node(self):

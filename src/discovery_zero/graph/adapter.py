@@ -218,7 +218,8 @@ def adapt_zero_graph(
 def write_back_beliefs(graph: HyperGraph, result: InferenceResult) -> None:
     """Write Gaia BP posterior beliefs back into Zero's nodes.
 
-    Locked nodes (proven/refuted) are skipped. Beliefs are clamped to [0, 1].
+    Locked nodes (proven/refuted) are skipped. Beliefs are clamped to
+    [CROMWELL_EPS, 1-CROMWELL_EPS].
     """
     for nid, belief in result.node_beliefs.items():
         node = graph.nodes.get(nid)
@@ -226,7 +227,7 @@ def write_back_beliefs(graph: HyperGraph, result: InferenceResult) -> None:
             continue
         if node.is_locked():
             continue
-        clamped = max(0.0, min(1.0, belief))
+        clamped = max(CROMWELL_EPS, min(1.0 - CROMWELL_EPS, belief))
         node.belief = clamped
 
 

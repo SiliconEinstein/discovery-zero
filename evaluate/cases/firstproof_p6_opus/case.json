@@ -13,7 +13,7 @@
   },
   "lean_policy": {
     "mode": "selective",
-    "enable_decomposition": false,
+    "enable_decomposition": true,
     "enable_strict_lean": true,
     "min_path_confidence": 0.8,
     "max_grade_d_ratio": 0.2,

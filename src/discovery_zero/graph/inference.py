@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Set
 
 from libs.inference_v2.engine import EngineConfig, InferenceEngine
+from libs.inference_v2.factor_graph import CROMWELL_EPS
 
 from discovery_zero.config import CONFIG
 from discovery_zero.graph import adapter as adapter_v1
@@ -101,6 +102,19 @@ class InferenceConfig:
 
 _DEFAULT_INFERENCE_CONFIG = InferenceConfig()
 
+# BP marginals are not Cromwell-clamped on output; values slightly past the
+# theoretical (ε, 1−ε) band are common from loopy BP float error. Warn only
+# when clearly invalid or far outside the band.
+_CROMWELL_BP_DIAG_ATOL = 5e-4
+
+
+def _bp_marginal_should_warn_outside_cromwell(belief: float) -> bool:
+    if not (0.0 <= belief <= 1.0):
+        return True
+    lo = CROMWELL_EPS - _CROMWELL_BP_DIAG_ATOL
+    hi = 1.0 - CROMWELL_EPS + _CROMWELL_BP_DIAG_ATOL
+    return belief < lo or belief > hi
+
 
 def run_inference_v2(
     graph: HyperGraph,
@@ -124,6 +138,13 @@ def run_inference_v2(
         for var_id, belief in v2_result.beliefs.items()
         if var_id not in adapted.synthetic_var_ids
     }
+    for var_id, belief in node_beliefs.items():
+        if _bp_marginal_should_warn_outside_cromwell(belief):
+            logger.warning(
+                "BP marginal outside Cromwell band (check numerical stability): %s=%.8g",
+                var_id,
+                belief,
+            )
     return adapter_v1.InferenceResult(
         node_beliefs=node_beliefs,
         converged=bool(v2_result.is_exact or v2_result.diagnostics.converged),
@@ -145,43 +166,6 @@ class SignalAccumulator:
 
     def clear(self) -> None:
         self.pending_signals = 0
-
-
-# ------------------------------------------------------------------ #
-# Refutation penalties                                                 #
-# ------------------------------------------------------------------ #
-
-def apply_refutation_penalties(
-    graph: HyperGraph,
-    penalty_ratio: float = REFUTATION_PENALTY_RATIO,
-) -> int:
-    """
-    Apply a one-shot Modus-Tollens-like penalty from refuted conclusions
-    back to the unverified premises of heuristic/decomposition support edges.
-
-    Restricted to non-formal incoming edges; does not penalize locked nodes.
-    Returns the number of nodes whose belief was lowered.
-    """
-    changed = 0
-    for nid, node in graph.nodes.items():
-        if node.state != "refuted":
-            continue
-        for eid in graph.get_edges_to(nid):
-            edge = graph.edges[eid]
-            if edge.edge_type == "formal":
-                continue
-            penalty = max(0.0, min(1.0, penalty_ratio * edge.confidence))
-            if penalty == 0.0:
-                continue
-            for pid in edge.premise_ids:
-                premise = graph.nodes[pid]
-                if premise.is_locked():
-                    continue
-                new_belief = max(0.0, premise.belief * (1.0 - penalty))
-                if new_belief < premise.belief:
-                    premise.belief = new_belief
-                    changed += 1
-    return changed
 
 
 # ------------------------------------------------------------------ #
@@ -230,16 +214,16 @@ def _collect_affected_subgraph(
 
 def propagate_beliefs(
     graph: HyperGraph,
-    max_iterations: int = 50,
-    damping: float = 0.5,
-    tol: float = 1e-6,
+    max_iterations: Optional[int] = None,
+    damping: Optional[float] = None,
+    tol: Optional[float] = None,
     *,
     changed_edge_ids: Optional[Set[str]] = None,
     warmstart: bool = False,
     config: Optional[InferenceConfig] = None,
 ) -> int:
     """
-    Update beliefs using Gaia's loopy BP, then apply refutation penalties.
+    Update beliefs using Gaia's loopy BP.
 
     Args:
         graph: The reasoning hypergraph to update in-place.
@@ -260,16 +244,15 @@ def propagate_beliefs(
     """
     # Config priority: explicit params > InferenceConfig > defaults
     eff_config = config or _DEFAULT_INFERENCE_CONFIG
-    eff_max_iter = max_iterations if max_iterations != 50 else eff_config.max_iterations
-    eff_damping = damping if damping != 0.5 else eff_config.damping
-    eff_tol = tol if tol != 1e-6 else eff_config.tol
+    eff_max_iter = max_iterations if max_iterations is not None else eff_config.max_iterations
+    eff_damping = damping if damping is not None else eff_config.damping
+    eff_tol = tol if tol is not None else eff_config.tol
 
     backend = getattr(CONFIG, "bp_backend", "gaia")
 
     if changed_edge_ids is not None and len(changed_edge_ids) > 0 and backend != "gaia_v2":
         affected_nodes, affected_edges = _collect_affected_subgraph(graph, changed_edge_ids)
         if len(affected_nodes) == 0:
-            apply_refutation_penalties(graph, eff_config.refutation_penalty_ratio)
             return 0
         # Build a subgraph view for BP.
         # Approach: temporarily create a sub-HyperGraph with only affected nodes/edges,
@@ -282,11 +265,11 @@ def propagate_beliefs(
             tol=eff_tol,
             warmstart=warmstart,
         )
+        write_back_beliefs(sub_graph, result)
         # Write beliefs back to the full graph
         for nid, node in sub_graph.nodes.items():
             if nid in graph.nodes and not graph.nodes[nid].is_locked():
                 graph.nodes[nid].belief = node.belief
-        apply_refutation_penalties(graph, eff_config.refutation_penalty_ratio)
         return result.iterations
 
     # Full-graph BP
@@ -294,7 +277,7 @@ def propagate_beliefs(
         try:
             result = run_inference_v2(
                 graph,
-                warmstart=False,
+                warmstart=warmstart,
                 config=eff_config,
             )
         except Exception as exc:
@@ -325,7 +308,6 @@ def propagate_beliefs(
         except Exception as exc:
             logger.warning("NeuralBPCorrector.apply_to_graph failed: %s", exc)
 
-    apply_refutation_penalties(graph, eff_config.refutation_penalty_ratio)
     return result.iterations
 
 

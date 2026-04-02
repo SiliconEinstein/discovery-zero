@@ -1,6 +1,7 @@
 """Tests for energy minimization (dual-state RENEW)."""
 
 import pytest
+from libs.inference_v2.factor_graph import CROMWELL_EPS
 from discovery_zero.graph.models import HyperGraph, Module
 from discovery_zero.graph.inference import propagate_beliefs
 from discovery_zero.graph.inference_energy import (
@@ -45,6 +46,14 @@ class TestEnergyPropagation:
         g.add_hyperedge([a.id], b.id, Module.LEAN, ["proof"], 0.99)
         it = propagate_beliefs_energy(g, EnergyConfig(step_size=0.1, max_iterations=150))
         assert g.nodes[b.id].belief > 0.9
+
+    def test_energy_clamps_unverified_to_cromwell_band(self):
+        g = HyperGraph()
+        a = g.add_node("ax", belief=1.0, state="proven")
+        b = g.add_node("conj", belief=0.5, prior=0.5)
+        g.add_hyperedge([a.id], b.id, Module.LEAN, ["proof"], 0.99)
+        propagate_beliefs_energy(g, EnergyConfig(step_size=0.5, max_iterations=40))
+        assert CROMWELL_EPS <= g.nodes[b.id].belief <= 1.0 - CROMWELL_EPS
 
 
 class TestEdgeEnergy:

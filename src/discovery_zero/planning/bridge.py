@@ -14,6 +14,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from libs.inference_v2.factor_graph import CROMWELL_EPS
+from discovery_zero.config import CONFIG
 from discovery_zero.graph.models import Module
 
 
@@ -348,16 +350,16 @@ def derive_subplan(plan: BridgePlan, focus_proposition_id: str) -> BridgePlan:
 # Grade reflects expected verification difficulty / initial confidence in the
 # proposition itself (node-level prior), not logical implication strength.
 BRIDGE_GRADE_PRIOR: dict[str, float] = {
-    "A": 0.92,
-    "B": 0.70,
-    "C": 0.50,
-    "D": 0.30,
+    "A": CONFIG.bridge_grade_prior_a,
+    "B": CONFIG.bridge_grade_prior_b,
+    "C": CONFIG.bridge_grade_prior_c,
+    "D": CONFIG.bridge_grade_prior_d,
 }
 
 # Bridge dependency edges encode "if premises then conclusion" relations.
 # Keep a strong, uniform implication confidence so BP can propagate along the
 # planned chain without being bottlenecked by proposition grade labels.
-BRIDGE_EDGE_CONFIDENCE: float = 0.85
+BRIDGE_EDGE_CONFIDENCE: float = CONFIG.bridge_edge_confidence
 
 
 def materialize_bridge_nodes(
@@ -427,12 +429,11 @@ def materialize_bridge_nodes(
             elif not matched_node.is_locked():
                 prior = _grade_prior(item.grade)
                 matched_node.prior = max(float(matched_node.prior), prior)
-                matched_node.belief = max(float(matched_node.belief), prior)
             continue
         prior = 1.0 if item.role == "seed" else _grade_prior(item.grade)
         node = graph.add_node(
             statement=item.statement,
-            belief=prior,
+            belief=1.0 if item.role == "seed" else 0.5,
             prior=prior,
             domain=default_domain,
             state="proven" if item.role == "seed" else "unverified",

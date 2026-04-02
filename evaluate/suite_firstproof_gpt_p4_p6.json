@@ -1,0 +1,11 @@
+{
+  "suite_id": "firstproof_p4_p6_gpt",
+  "display_name": "FirstProof P4 + P6 (GPT-5.2)",
+  "description": "Discovery Zero FirstProof P4+P6 with GPT-5.2, all modules enabled.",
+  "repeats": 1,
+  "run_mode": "serial",
+  "cases": [
+    "cases/firstproof_p4/case.json",
+    "cases/firstproof_p6/case.json"
+  ]
+}

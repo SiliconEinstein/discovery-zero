@@ -41,3 +41,47 @@ def test_suggest_subgoals_uses_graph_fallback():
     suggestions = parser.suggest_subgoals(gap, graph)
     assert suggestions
 
+
+def test_router_passes_workspace_and_timeouts(monkeypatch, tmp_path):
+    claim = Claim(claim_text="if A then B", claim_type=ClaimType.STRUCTURAL, source_memo_id="m")
+    router = StructuralClaimRouter(
+        workspace_path=tmp_path,
+        decompose_timeout=222,
+        verify_timeout=333,
+    )
+    observed = {}
+
+    class _FakeDecomposeResult:
+        goals = []
+
+    class _FakeVerifyResult:
+        success = True
+        error_message = ""
+
+    def _fake_decompose(code, *, workspace_path=None, timeout=0, stream=False):
+        observed["decompose_workspace"] = workspace_path
+        observed["decompose_timeout"] = timeout
+        return _FakeDecomposeResult()
+
+    def _fake_verify(code, *, workspace_path=None, timeout=0, stream=False):
+        observed["verify_workspace"] = workspace_path
+        observed["verify_timeout"] = timeout
+        return _FakeVerifyResult()
+
+    monkeypatch.setattr(
+        "discovery_zero.planning.lean_feedback.decompose_proof_skeleton",
+        _fake_decompose,
+    )
+    monkeypatch.setattr(
+        "discovery_zero.planning.lean_feedback.verify_proof",
+        _fake_verify,
+    )
+
+    router.decompose_to_subclaims(claim, source_memo_id="m")
+    ok, _ = router.verify_structural_claim(claim)
+    assert ok
+    assert observed["decompose_workspace"] == tmp_path
+    assert observed["decompose_timeout"] == 222
+    assert observed["verify_workspace"] == tmp_path
+    assert observed["verify_timeout"] == 333
+

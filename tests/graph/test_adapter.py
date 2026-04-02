@@ -113,11 +113,12 @@ class TestWriteBackBeliefs:
         assert g.nodes[a.id].belief == 1.0
 
     def test_beliefs_clamped(self):
+        from libs.inference_v2.factor_graph import CROMWELL_EPS
         g = HyperGraph()
         a = g.add_node("A", belief=0.5, prior=0.5)
         result = InferenceResult(node_beliefs={a.id: 1.5})
         write_back_beliefs(g, result)
-        assert g.nodes[a.id].belief == 1.0
+        assert g.nodes[a.id].belief == pytest.approx(1.0 - CROMWELL_EPS, abs=1e-9)
 
 
 class TestRunGaiaBp:

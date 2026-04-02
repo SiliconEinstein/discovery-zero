@@ -45,12 +45,16 @@ class ClaimVerifier:
         *,
         backend_name: str = "local",
         default_timeout: int = 60,
+        lean_verify_timeout: Optional[int] = None,
         verified_library_path: Optional[Path] = None,
         verification_model: Optional[str] = None,
         max_claims_per_call: int = _MAX_CLAIMS_PER_CALL,
     ) -> None:
         self._backend_name = backend_name
         self._default_timeout = default_timeout
+        # Structural claims run verify_proof (lake build); keep separate from
+        # default_timeout used for Python experiment execution (often 60s).
+        self._lean_verify_timeout = lean_verify_timeout
         self._verification_model = verification_model  # override model for code generation
         self._max_claims_per_call = max_claims_per_call
         self._incremental_codegen = IncrementalCodeGenerator(
@@ -336,7 +340,12 @@ class ClaimVerifier:
         if record_dir is not None:
             lean_file = record_dir / f"claim_verify_struct_{claim_index}_code.lean"
             lean_file.write_text(lean_code, encoding="utf-8")
-        verify = verify_proof(lean_code, timeout=timeout_value)
+        lean_t = (
+            self._lean_verify_timeout
+            if self._lean_verify_timeout is not None
+            else timeout_value
+        )
+        verify = verify_proof(lean_code, timeout=lean_t)
         verdict: Literal["verified", "refuted", "inconclusive"]
         if verify.success:
             verdict = "verified"

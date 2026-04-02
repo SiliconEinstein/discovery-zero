@@ -9,18 +9,25 @@ Applies dual-state transitions:
 
 from __future__ import annotations
 
+from libs.inference_v2.factor_graph import CROMWELL_EPS
+
+from discovery_zero.config import CONFIG
 from discovery_zero.graph.models import HyperGraph, Hyperedge, Module
 
 DEFAULT_CONFIDENCE = {
-    Module.PLAUSIBLE: 0.5,
-    Module.EXPERIMENT: 0.85,
-    Module.LEAN: 0.99,
-    Module.ANALOGY: 0.55,
-    Module.DECOMPOSE: 0.6,
-    Module.SPECIALIZE: 0.75,
-    Module.RETRIEVE: 0.4,
+    Module.PLAUSIBLE: CONFIG.default_confidence_plausible,
+    Module.EXPERIMENT: CONFIG.default_confidence_experiment,
+    Module.LEAN: CONFIG.default_confidence_lean,
+    Module.ANALOGY: CONFIG.default_confidence_analogy,
+    Module.DECOMPOSE: CONFIG.default_confidence_decompose,
+    Module.SPECIALIZE: CONFIG.default_confidence_specialize,
+    Module.RETRIEVE: CONFIG.default_confidence_retrieve,
 }
-DEFAULT_UNVERIFIED_CLAIM_PRIOR = 0.15
+DEFAULT_UNVERIFIED_CLAIM_PRIOR = CONFIG.unverified_claim_prior
+EXPERIMENT_PRIOR_CAP = CONFIG.experiment_prior_cap
+VERIFIED_PRIOR_FLOOR = CONFIG.verified_prior_floor
+INCONCLUSIVE_PRIOR_CAP = CONFIG.inconclusive_prior_cap
+REFUTATION_PRIOR_MULTIPLIER = CONFIG.refutation_prior_multiplier
 
 
 def _is_axiom_or_proven(graph: HyperGraph, node_id: str) -> bool:
@@ -112,9 +119,9 @@ def ingest_skill_output(
             if existing:
                 node = graph.nodes[existing[0]]
                 if not node.is_locked():
-                    node.prior = max(0.05, node.prior * (1.0 - penalty))
+                    node.prior = max(CROMWELL_EPS, node.prior * (1.0 - penalty))
             else:
-                weakened_belief = max(0.05, 0.5 * (1.0 - penalty))
+                weakened_belief = max(CROMWELL_EPS, 0.5 * (1.0 - penalty))
                 graph.add_node(
                     statement=conclusion_statement,
                     belief=weakened_belief,
@@ -136,8 +143,8 @@ def ingest_skill_output(
         else:
             node = graph.add_node(
                 statement=conclusion_statement,
-                belief=0.0,
-                prior=0.0,
+                belief=CROMWELL_EPS,
+                prior=CROMWELL_EPS,
                 domain=output.get("domain"),
                 provenance=provenance,
             )
@@ -158,9 +165,9 @@ def ingest_skill_output(
         if existing:
             node = graph.nodes[existing[0]]
             if not node.is_locked():
-                node.prior = max(0.05, node.prior * (1.0 - penalty))
+                node.prior = max(CROMWELL_EPS, node.prior * (1.0 - penalty))
         else:
-            weakened_belief = max(0.05, 0.5 * (1.0 - penalty))
+            weakened_belief = max(CROMWELL_EPS, 0.5 * (1.0 - penalty))
             graph.add_node(
                 statement=conclusion_statement,
                 belief=weakened_belief,
@@ -176,7 +183,6 @@ def ingest_skill_output(
 
     premise_ids = []
     try:
-        from discovery_zero.config import CONFIG
         unverified_prior = float(getattr(CONFIG, "unverified_claim_prior", DEFAULT_UNVERIFIED_CLAIM_PRIOR))
     except Exception:
         unverified_prior = DEFAULT_UNVERIFIED_CLAIM_PRIOR
@@ -253,7 +259,7 @@ def ingest_skill_output(
     if module == Module.EXPERIMENT:
         conclusion_node = graph.nodes[conclusion_id]
         if not conclusion_node.is_locked():
-            exp_prior = min(0.85, max(conclusion_node.prior, confidence))
+            exp_prior = min(EXPERIMENT_PRIOR_CAP, max(conclusion_node.prior, confidence))
             conclusion_node.prior = exp_prior
 
     return edge
@@ -307,7 +313,6 @@ def ingest_verified_claim(
         else:
             is_new_node = True
             try:
-                from discovery_zero.config import CONFIG
                 unverified_prior = float(getattr(CONFIG, "unverified_claim_prior", DEFAULT_UNVERIFIED_CLAIM_PRIOR))
             except Exception:
                 unverified_prior = DEFAULT_UNVERIFIED_CLAIM_PRIOR
@@ -335,11 +340,11 @@ def ingest_verified_claim(
             node.prior = 1.0
             node.belief = 1.0
         elif verification_source == "experiment":
-            node.prior = max(node.prior, 0.85)
+            node.prior = max(node.prior, EXPERIMENT_PRIOR_CAP)
             if node.state == "refuted":
                 node.state = "unverified"
         else:
-            node.prior = max(node.prior, 0.6)
+            node.prior = max(node.prior, VERIFIED_PRIOR_FLOOR)
             if node.state == "refuted":
                 node.state = "unverified"
     elif verdict_normalized == "refuted":
@@ -352,15 +357,14 @@ def ingest_verified_claim(
             # All non-formal sources (experiment, llm_judge, heuristic, etc.)
             # apply a sharp belief penalty but let BP determine the posterior.
             if not node.is_locked():
-                node.prior = max(0.05, node.prior * 0.05)
+                node.prior = max(CROMWELL_EPS, node.prior * REFUTATION_PRIOR_MULTIPLIER)
     else:
         try:
-            from discovery_zero.config import CONFIG
             unverified_prior = float(getattr(CONFIG, "unverified_claim_prior", DEFAULT_UNVERIFIED_CLAIM_PRIOR))
         except Exception:
             unverified_prior = DEFAULT_UNVERIFIED_CLAIM_PRIOR
         if not node.is_locked():
-            node.prior = max(unverified_prior, min(node.prior, 0.4))
+            node.prior = max(unverified_prior, min(node.prior, INCONCLUSIVE_PRIOR_CAP))
 
     # When a new node was created and a parent edge is provided, create a
     # hyperedge connecting this new node as a premise to the conclusion of

@@ -58,8 +58,15 @@ class TransportConfig:
     """Seconds to wait for the server to start sending the response."""
 
     stream_chunk_timeout: float = 120.0
-    """Max seconds to wait between successive chunks in a streaming response.
-    If no data arrives within this window the connection is treated as dead."""
+    """Max seconds to wait between successive *content-bearing* chunks in a
+    streaming response.  Keepalive heartbeats reset the httpx read timer but
+    do NOT reset this content timer, so a server that sends only keepalives
+    will still be detected as stalled."""
+
+    stream_wall_timeout: float = 900.0
+    """Hard wall-clock limit for the entire streaming response (seconds).
+    Protects against indefinite hangs regardless of keepalives.  Should be
+    generous enough for extended thinking (Opus: ~5 min) + long generation."""
 
     pool_max_connections: int = 10
     """httpx connection pool — total connections across all hosts."""
@@ -214,6 +221,7 @@ class LLMTransport:
 
         eff_timeout = timeout or self._config.read_timeout
         chunk_timeout = self._config.stream_chunk_timeout
+        wall_timeout = self._config.stream_wall_timeout
         for attempt in range(self._config.max_retries + 1):
             try:
                 with self._client.stream(
@@ -221,7 +229,12 @@ class LLMTransport:
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=httpx.Timeout(connect=self._config.connect_timeout, read=eff_timeout, write=eff_timeout, pool=self._config.connect_timeout),
+                    timeout=httpx.Timeout(
+                        connect=self._config.connect_timeout,
+                        read=eff_timeout,
+                        write=eff_timeout,
+                        pool=self._config.connect_timeout,
+                    ),
                 ) as resp:
                     if resp.status_code in self._config.retryable_status_codes:
                         raise TransportError(
@@ -235,15 +248,28 @@ class LLMTransport:
                             status_code=resp.status_code,
                             body=body,
                         )
-                    last_chunk_time = time.monotonic()
+                    stream_start = time.monotonic()
+                    last_content_time = stream_start
                     for text_chunk in resp.iter_text():
-                        last_chunk_time = time.monotonic()
-                        yield text_chunk
-                    idle = time.monotonic() - last_chunk_time
-                    if idle > chunk_timeout:
-                        raise TransportError(
-                            f"Stream idle for {idle:.1f}s (chunk_timeout={chunk_timeout}s); treating as dead connection"
+                        now = time.monotonic()
+                        if now - stream_start > wall_timeout:
+                            raise TransportError(
+                                f"Stream wall-clock timeout after {now - stream_start:.0f}s "
+                                f"(limit={wall_timeout:.0f}s)"
+                            )
+                        has_content = any(
+                            seg.strip().startswith("data:")
+                            for seg in text_chunk.split("\n")
+                            if seg.strip() and not seg.strip().startswith(":")
                         )
+                        if has_content:
+                            last_content_time = now
+                        elif now - last_content_time > chunk_timeout:
+                            raise TransportError(
+                                f"No content-bearing SSE data for {now - last_content_time:.0f}s "
+                                f"(chunk_timeout={chunk_timeout:.0f}s); only keepalives received"
+                            )
+                        yield text_chunk
                 return
             except (NonRetryableError, StopIteration):
                 raise
@@ -389,6 +415,8 @@ def get_default_transport() -> LLMTransport:
             jitter=CONFIG.llm_retry_jitter,
             connect_timeout=CONFIG.llm_connect_timeout,
             pool_max_connections=CONFIG.llm_pool_max_connections,
+            stream_chunk_timeout=float(getattr(CONFIG, "llm_stream_chunk_timeout", 120.0)),
+            stream_wall_timeout=float(getattr(CONFIG, "llm_stream_wall_timeout", 900.0)),
         )
         _DEFAULT_TRANSPORT = LLMTransport(cfg)
     return _DEFAULT_TRANSPORT
