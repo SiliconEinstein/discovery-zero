@@ -296,7 +296,6 @@ class MCTSDiscoveryEngine:
                 part for part in (rolling_feedback, retrieval_context) if part
             )
             target_belief_before = float(target_node.belief)
-            graph_snapshot_before = graph.model_dump_json()
 
             try:
                 action_result = self._execute_selected_action(
@@ -383,12 +382,9 @@ class MCTSDiscoveryEngine:
                     "node_id": selected_node_id,
                     "iteration": iteration,
                     "belief_before": target_belief_before,
-                    "belief_after": target_belief_before,  # unchanged on failure
+                    "belief_after": target_belief_before,
                     "belief_delta": 0.0,
-                    "node_beliefs": {
-                        nid: round(float(nd.belief), 6)
-                        for nid, nd in graph.nodes.items()
-                    },
+                    "node_count": len(graph.nodes),
                 }
                 result.steps.append(fail_step)
                 result.iterations_completed = iteration
@@ -492,12 +488,6 @@ class MCTSDiscoveryEngine:
             )
             reward = verification_reward + exploration_reward + verify_bonus
 
-            # Snapshot of all node beliefs after this action + BP.
-            node_beliefs_after = {
-                nid: round(float(nd.belief), 6)
-                for nid, nd in graph.nodes.items()
-            }
-
             result.steps.append(
                 {
                     "phase": self._phase_name(
@@ -511,9 +501,9 @@ class MCTSDiscoveryEngine:
                     "belief_after": round(target_belief_after, 6),
                     "belief_delta": round(target_belief_after - target_belief_before, 6),
                     "reward": round(reward, 6),
-                    "node_beliefs": node_beliefs_after,
-                    "raw": action_result.raw_output,
-                    "normalized": action_result.normalized_output,
+                    "node_count": len(graph.nodes),
+                    "raw": (action_result.raw_output or "")[:500],
+                    "normalized": None,
                     "judge": action_result.judge_output,
                     "edge_id": action_result.ingest_edge_id,
                     "message": action_result.message,
@@ -562,9 +552,8 @@ class MCTSDiscoveryEngine:
             )
             htps_backup(self.htps_state, selected_path, target_belief_after)
 
-            graph_snapshot_after = graph.model_dump_json()
             experience = ExperienceRecord(
-                graph_snapshot_json=graph_snapshot_before,
+                graph_snapshot_json="",
                 target_node_id=self.target_node_id,
                 action_node_id=selected_node_id,
                 action_module=selected_module.value,
@@ -572,7 +561,7 @@ class MCTSDiscoveryEngine:
                 belief_delta=target_belief_after - target_belief_before,
                 success=True,
                 bridge_plan_valid=result.best_bridge_plan is not None,
-                next_graph_snapshot_json=graph_snapshot_after,
+                next_graph_snapshot_json="",
                 run_id=str(self.graph_path.parent),
             )
             result.experiences.append(experience)
@@ -1751,7 +1740,7 @@ class MCTSDiscoveryEngine:
                 result.steps.append(
                     {
                         "phase": "bridge_plan_mcts",
-                        "raw": raw_bridge,
+                        "raw": (raw_bridge or "")[:500],
                         "bridge_metrics": plan.metrics(),
                         "attempt": bridge_attempt,
                     }

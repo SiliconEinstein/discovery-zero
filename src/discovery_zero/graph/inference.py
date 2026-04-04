@@ -116,6 +116,9 @@ def _bp_marginal_should_warn_outside_cromwell(belief: float) -> bool:
     return belief < lo or belief > hi
 
 
+_v2_engine_cache: dict[tuple, Any] = {}
+
+
 def run_inference_v2(
     graph: HyperGraph,
     *,
@@ -125,13 +128,17 @@ def run_inference_v2(
     """Run inference_v2 and convert output to v1-compatible InferenceResult."""
     adapted = adapt_zero_graph_v2(graph, warmstart=warmstart)
     eff_config = config or _DEFAULT_INFERENCE_CONFIG
-    engine = InferenceEngine(
-        EngineConfig(
-            bp_max_iter=eff_config.max_iterations,
-            bp_damping=eff_config.damping,
-            bp_threshold=eff_config.tol,
+    cache_key = (eff_config.max_iterations, eff_config.damping, eff_config.tol)
+    engine = _v2_engine_cache.get(cache_key)
+    if engine is None:
+        engine = InferenceEngine(
+            EngineConfig(
+                bp_max_iter=eff_config.max_iterations,
+                bp_damping=eff_config.damping,
+                bp_threshold=eff_config.tol,
+            )
         )
-    )
+        _v2_engine_cache[cache_key] = engine
     v2_result = engine.run(adapted.factor_graph, method="auto")
     node_beliefs = {
         var_id: belief
