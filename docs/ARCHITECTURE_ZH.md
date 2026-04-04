@@ -322,7 +322,9 @@ BP 引擎（`src/gaia_bp/`）支持以下 `FactorType`：
 `adapter_v2.py` 将超图边映射为 factor：
 - **单前提边**：直接用 `SOFT_IMPLICATION(A → B)`
 - **多前提边**：先 `CONJUNCTION(A₁,...,Aₖ → M)`，再 `SOFT_IMPLICATION(M → B)`
-- **矛盾/等价**：创建 `relation_var` 并用对应的 `FactorType`
+  - 当前提数量超过 `MAX_CONJUNCTION_ARITY`（默认 6）时，自动拆分为链式小 CONJUNCTION 以避免 BP 表操作的指数内存消耗（`(A∧B∧C) ∧ (D∧E∧F) → M`，数学上等价于 `A∧B∧C∧D∧E∧F → M`）
+- **同结论边去重**：同模块指向相同结论的 plausible 边合并为单因子，effective p1 使用指数衰减
+- **矛盾/等价**：创建 `relation_var`（prior=1-ε）并用对应的 `FactorType`；CONTRADICTION 当前由 BP modus tollens 处理，不生成显式因子
 
 ### 6.2 两种触发方式
 

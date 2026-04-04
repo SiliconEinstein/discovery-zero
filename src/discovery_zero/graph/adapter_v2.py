@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # uniform row — "premise absent provides no directional evidence" (07-bp §2.3 C4).
 P2_MAXENT_NEUTRAL_SOFT_ENTAILMENT: float = 0.5
 PLAUSIBLE_DEDUP_DECAY: float = 0.3
+MAX_CONJUNCTION_ARITY: int = 6
 
 
 def _module_value(edge: Hyperedge) -> str:
@@ -104,6 +105,41 @@ def _effective_p1_from_raw(raw: float, p2: float, *, edge_id: str) -> float:
     return max(raw, floor)
 
 
+def _build_chained_conjunction(
+    fg: FactorGraph,
+    premises: list[str],
+    *,
+    base_id: str,
+    synthetic_var_ids: set[str],
+) -> str:
+    """Build a CONJUNCTION over premises, splitting into a chain of small
+    factors (each at most MAX_CONJUNCTION_ARITY variables) to avoid
+    exponential memory in BP table operations.  Returns the final
+    mediator variable ID."""
+    if len(premises) == 1:
+        return premises[0]
+    if len(premises) <= MAX_CONJUNCTION_ARITY:
+        mediator = f"{base_id}_M"
+        if mediator not in fg.variables:
+            fg.add_variable(mediator, 0.5)
+        synthetic_var_ids.add(mediator)
+        fg.add_factor(f"{base_id}_conj", FactorType.CONJUNCTION, premises, mediator)
+        return mediator
+    chunks: list[str] = []
+    for i in range(0, len(premises), MAX_CONJUNCTION_ARITY - 1):
+        chunk = premises[i : i + MAX_CONJUNCTION_ARITY - 1]
+        if len(chunk) == 1:
+            chunks.append(chunk[0])
+            continue
+        mid = f"{base_id}_Mc{i}"
+        if mid not in fg.variables:
+            fg.add_variable(mid, 0.5)
+        synthetic_var_ids.add(mid)
+        fg.add_factor(f"{base_id}_conj{i}", FactorType.CONJUNCTION, chunk, mid)
+        chunks.append(mid)
+    return _build_chained_conjunction(fg, chunks, base_id=f"{base_id}_chain", synthetic_var_ids=synthetic_var_ids)
+
+
 def _add_implication_or_conjunction_then_implication(
     fg: FactorGraph,
     *,
@@ -120,15 +156,8 @@ def _add_implication_or_conjunction_then_implication(
             conclusion,
         )
         return
-    mediator = f"{edge_id}_M"
-    if mediator not in fg.variables:
-        fg.add_variable(mediator, 0.5)
-    synthetic_var_ids.add(mediator)
-    fg.add_factor(
-        f"{edge_id}_conj",
-        FactorType.CONJUNCTION,
-        premises,
-        mediator,
+    mediator = _build_chained_conjunction(
+        fg, premises, base_id=edge_id, synthetic_var_ids=synthetic_var_ids,
     )
     fg.add_factor(
         edge_id,
@@ -211,21 +240,17 @@ def adapt_zero_graph_v2(
             except ValueError as exc:
                 logger.warning("Skipping deduplicated SOFT_ENTAILMENT %s: %s", dedup_eid, exc)
             continue
-        mediator = f"{dedup_eid}_M"
-        if mediator not in fg.variables:
-            fg.add_variable(mediator, 0.5)
-        synthetic_var_ids.add(mediator)
         try:
-            fg.add_factor(
-                f"{dedup_eid}_conj",
-                FactorType.CONJUNCTION,
+            final_mediator = _build_chained_conjunction(
+                fg,
                 premise_union,
-                mediator,
+                base_id=dedup_eid,
+                synthetic_var_ids=synthetic_var_ids,
             )
             fg.add_factor(
                 dedup_eid,
                 FactorType.SOFT_ENTAILMENT,
-                [mediator],
+                [final_mediator],
                 conclusion,
                 p1=p1_effective,
                 p2=p2_group,
@@ -274,15 +299,8 @@ def adapt_zero_graph_v2(
             continue
 
         try:
-            mediator = f"{eid}_M"
-            if mediator not in fg.variables:
-                fg.add_variable(mediator, 0.5)
-            synthetic_var_ids.add(mediator)
-            fg.add_factor(
-                f"{eid}_conj",
-                FactorType.CONJUNCTION,
-                premises,
-                mediator,
+            mediator = _build_chained_conjunction(
+                fg, premises, base_id=eid, synthetic_var_ids=synthetic_var_ids,
             )
             fg.add_factor(
                 eid,
