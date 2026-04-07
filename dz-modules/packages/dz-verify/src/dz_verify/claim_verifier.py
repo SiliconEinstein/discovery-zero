@@ -140,13 +140,27 @@ class ClaimVerifier:
         data_hint = ""
         if data_files:
             file_lines = "\n".join(
-                f"- {alias}: {path.name}" for alias, path in sorted(data_files.items())
+                f"- '{alias}' (filename: {path.name})" for alias, path in sorted(data_files.items())
             )
+            first_alias = sorted(data_files.keys())[0]
+            first_path = data_files[sorted(data_files.keys())[0]]
+            ext = first_path.suffix.lower()
+            if ext in (".dta",):
+                read_example = f"pd.read_stata(DATA_DIR + '/' + DATA_FILES['{first_alias}'])"
+            elif ext in (".xlsx", ".xls"):
+                read_example = f"pd.read_excel(DATA_DIR + '/' + DATA_FILES['{first_alias}'])"
+            elif ext in (".tsv",):
+                read_example = f"pd.read_csv(DATA_DIR + '/' + DATA_FILES['{first_alias}'], sep='\\t')"
+            else:
+                read_example = f"pd.read_csv(DATA_DIR + '/' + DATA_FILES['{first_alias}'])"
             data_hint = (
-                "\nAvailable datasets (copied into runtime DATA_DIR):\n"
+                "\nAvailable datasets (copied into runtime DATA_DIR, accessible via DATA_FILES dict):\n"
                 f"{file_lines}\n"
-                "Use DATA_DIR + '/' + DATA_FILES['<alias>'] to read files, for example:\n"
-                "pd.read_csv(DATA_DIR + '/' + DATA_FILES['main'])\n"
+                f"Read files using the EXACT key from DATA_FILES, for example:\n"
+                f"import pandas as pd\n"
+                f"df = {read_example}\n"
+                f"Available DATA_FILES keys: {sorted(data_files.keys())}\n"
+                "IMPORTANT: Use json.dumps() to print your final JSON output, NOT print(dict).\n"
             )
         prompt = (
             f"Claim:\n{claim.claim_text}\n\n"
