@@ -146,6 +146,58 @@ class TestGaiaIROutput:
         assert ir_hash_path.exists()
         assert ir_hash_path.read_text().strip() != ""
 
+    def test_beliefs_json_matches_gaia_infer_schema(self, simple_graph, tmp_path):
+        """beliefs.json must use the same schema as `gaia infer` output."""
+        import json
+
+        save_gaia_artifacts(simple_graph, tmp_path, source_id="test_src")
+        beliefs_path = tmp_path / ".gaia" / "reviews" / "test_src" / "beliefs.json"
+        assert beliefs_path.exists(), "beliefs.json must be in .gaia/reviews/<source_id>/"
+        data = json.loads(beliefs_path.read_text())
+
+        assert "ir_hash" in data
+        assert isinstance(data["beliefs"], list), "beliefs must be a list (not a dict)"
+        for entry in data["beliefs"]:
+            assert "knowledge_id" in entry, "each belief entry needs knowledge_id"
+            assert "label" in entry, "each belief entry needs label"
+            assert "belief" in entry, "each belief entry needs belief"
+            assert 0.0 <= entry["belief"] <= 1.0
+
+    def test_parameterization_json_matches_gaia_ir_schema(self, simple_graph, tmp_path):
+        """parameterization.json must use Gaia IR PriorRecord / StrategyParamRecord schema."""
+        import json
+
+        save_gaia_artifacts(simple_graph, tmp_path, source_id="test_src")
+        param_path = tmp_path / ".gaia" / "reviews" / "test_src" / "parameterization.json"
+        assert param_path.exists()
+        data = json.loads(param_path.read_text())
+
+        assert "ir_hash" in data
+        assert "source" in data, "must have ParameterizationSource"
+        assert "source_id" in data["source"]
+        assert "model" in data["source"]
+        assert "resolution_policy" in data
+        assert "strategy" in data["resolution_policy"]
+        assert "priors" in data
+        assert isinstance(data["priors"], list)
+        for record in data["priors"]:
+            assert "knowledge_id" in record, "PriorRecord must have knowledge_id"
+            assert "value" in record, "PriorRecord must have value"
+            assert "source_id" in record, "PriorRecord must have source_id"
+
+    def test_ir_written_by_gaia_write_compiled_artifacts(self, simple_graph, tmp_path):
+        """ir.json must be written by Gaia's write_compiled_artifacts, not custom code."""
+        import json
+        from gaia.cli._packages import write_compiled_artifacts as gaia_writer
+        import dz_hypergraph.persistence as persistence_module
+
+        src = __import__("inspect").getsource(persistence_module.save_gaia_artifacts)
+        assert "write_compiled_artifacts" in src, (
+            "save_gaia_artifacts must delegate ir.json writing to "
+            "gaia.cli._packages.write_compiled_artifacts"
+        )
+        assert persistence_module.write_compiled_artifacts is gaia_writer
+
 
 # ---------------------------------------------------------------------------
 # 3. Verify inference uses Gaia's BP engine — not a custom implementation
