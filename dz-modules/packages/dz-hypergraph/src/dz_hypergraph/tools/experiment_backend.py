@@ -182,13 +182,9 @@ def stage_data_files(
             raise FileNotFoundError(f"data file not found: {src}")
         if not src.is_file():
             raise ValueError(f"data path must be a file: {src}")
-        safe_alias = "".join(ch for ch in str(alias) if ch.isalnum() or ch in ("_", "-"))
-        if not safe_alias:
-            raise ValueError(f"invalid data file alias: {alias!r}")
-        ext = src.suffix or ".csv"
-        dst_name = f"{safe_alias}{ext}"
+        dst_name = src.name
         shutil.copy2(src, stage_dir / dst_name)
-        file_map[safe_alias] = dst_name
+        file_map[alias] = dst_name
     return stage_dir, file_map
 
 
@@ -236,10 +232,13 @@ def inject_data_preamble(
     )
     import re
     code = re.sub(
-        r"^DATA_DIR\s*=\s*.+$", "# DATA_DIR already injected", code, flags=re.MULTILINE
+        r"^DATA_DIR\s*=\s*[^\n]+$", "# DATA_DIR already injected", code, flags=re.MULTILINE
     )
     code = re.sub(
-        r"^DATA_FILES\s*=\s*.+$", "# DATA_FILES already injected", code, flags=re.MULTILINE
+        r"^DATA_FILES\s*=\s*\{[^}]*\}", "# DATA_FILES already injected", code, flags=re.DOTALL
+    )
+    code = re.sub(
+        r"^DATA_FILES\s*=\s*[^\n]+$", "# DATA_FILES already injected", code, flags=re.MULTILINE
     )
     return preamble + "\n" + code
 
