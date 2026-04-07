@@ -421,11 +421,11 @@ result.strategy_param_records # list[StrategyParamRecord] — 同上
 # save_gaia_artifacts: 持久化到 .gaia/ 目录
 from pathlib import Path
 save_gaia_artifacts(graph, Path("output/"))
-# 产出：
-#   output/.gaia/ir.json                              — 完整 LocalCanonicalGraph
-#   output/.gaia/ir_hash                              — ir_hash 值
-#   output/.gaia/reviews/dz_bridge/parameterization.json  — 参数化
-#   output/.gaia/beliefs.json                         — 当前信念快照
+# 产出（与 gaia compile + gaia infer 输出格式一致）：
+#   output/.gaia/ir.json                                    — 完整 LocalCanonicalGraph
+#   output/.gaia/ir_hash                                    — ir_hash 值
+#   output/.gaia/reviews/dz_bridge/parameterization.json    — 参数化（PriorRecord + StrategyParamRecord）
+#   output/.gaia/reviews/dz_bridge/beliefs.json             — 信念快照（与 gaia infer 同 schema）
 ```
 
 ---
