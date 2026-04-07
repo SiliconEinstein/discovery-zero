@@ -17,7 +17,7 @@ Architecture:
 Integration points with Gaia:
   - `FactorGraph` / `BeliefPropagation` from libs/inference/
   - `EmbeddingModel` from libs/embedding.py for semantic node features
-  - `run_gaia_bp()` in graph/adapter.py wraps the integration
+  - `propagate_beliefs()` in graph/inference.py wraps Gaia integration
 
 Training:
   - BPTrainingCollector harvests (graph_snapshot, standard_beliefs, actual_beliefs)
@@ -509,8 +509,8 @@ class BPTrainingCollector:
         return samples[:max_samples]
 
     def _collect_from_run(self, run_dir: Path) -> List[BPTrainingSample]:
+        from dz_hypergraph.inference import propagate_beliefs
         from dz_hypergraph.persistence import load_graph as _load_graph
-        from dz_hypergraph.adapter import run_gaia_bp, write_back_beliefs
 
         final_graph_path = run_dir / "graph.json"
         if not final_graph_path.exists():
@@ -538,8 +538,7 @@ class BPTrainingCollector:
                 snap_graph = HyperGraph.model_validate_json(snapshot_str)
 
                 # Run standard Gaia BP on snapshot
-                result = run_gaia_bp(snap_graph)
-                write_back_beliefs(snap_graph, result)
+                propagate_beliefs(snap_graph, warmstart=False)
                 standard = {nid: node.belief for nid, node in snap_graph.nodes.items()}
 
                 samples.append(BPTrainingSample(

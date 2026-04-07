@@ -2,9 +2,9 @@
 
 import pytest
 from dz_hypergraph.config import CONFIG
-from dz_hypergraph.adapter import InferenceResult
 from dz_hypergraph.models import HyperGraph, Module
 from dz_hypergraph.inference import (
+    InferenceResult,
     _bp_marginal_should_warn_outside_cromwell,
     propagate_beliefs,
     run_inference_v2,
@@ -166,13 +166,13 @@ def test_propagate_beliefs_with_gaia_v2_backend(monkeypatch):
 
 
 def test_incremental_bp_writes_back_result_node_beliefs(monkeypatch):
-    monkeypatch.setattr(CONFIG, "bp_backend", "gaia")
+    monkeypatch.setattr(CONFIG, "bp_backend", "gaia_v2")
     g = HyperGraph()
     a = g.add_node("A", belief=0.9, prior=0.9)
     b = g.add_node("B", belief=0.2, prior=0.2)
     edge = g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["support"], confidence=0.7)
 
-    def _fake_run_gaia_bp(*args, **kwargs):
+    def _fake_run_inference_v2(*args, **kwargs):
         return InferenceResult(
             node_beliefs={a.id: 0.9, b.id: 0.88},
             converged=True,
@@ -180,7 +180,7 @@ def test_incremental_bp_writes_back_result_node_beliefs(monkeypatch):
             diagnostics=None,
         )
 
-    monkeypatch.setattr("dz_hypergraph.inference.run_gaia_bp", _fake_run_gaia_bp)
+    monkeypatch.setattr("dz_hypergraph.inference.run_inference_v2", _fake_run_inference_v2)
     iters = propagate_beliefs(g, changed_edge_ids={edge.id}, warmstart=True)
     assert iters == 3
     assert g.nodes[b.id].belief == pytest.approx(0.88, abs=1e-6)

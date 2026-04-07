@@ -119,6 +119,8 @@ class ZeroConfig:
     bp_max_iterations: int = _env_int("DISCOVERY_ZERO_BP_MAX_ITERATIONS", 50)
     bp_damping: float = _env_float("DISCOVERY_ZERO_BP_DAMPING", 0.5)
     bp_tolerance: float = _env_float("DISCOVERY_ZERO_BP_TOLERANCE", 1e-6)
+    inference_method: str = _env("DISCOVERY_ZERO_INFERENCE_METHOD", "auto")
+    bp_use_full_cpt: bool = _env_bool("DISCOVERY_ZERO_BP_USE_FULL_CPT", False)
 
     # Incremental BP: only re-propagate subgraph affected by changed edges
     bp_incremental: bool = _env_bool("DISCOVERY_ZERO_BP_INCREMENTAL", True)

@@ -83,14 +83,7 @@ def test_bp_training_collector_reads_snapshot_runs(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-        "dz_hypergraph.adapter.run_gaia_bp",
-        lambda graph: {nid: node.belief for nid, node in graph.nodes.items()},
-    )
-    monkeypatch.setattr(
-        "dz_hypergraph.adapter.write_back_beliefs",
-        lambda graph, beliefs: None,
-    )
+    monkeypatch.setattr("dz_hypergraph.inference.propagate_beliefs", lambda *args, **kwargs: 1)
 
     samples = BPTrainingCollector().collect_from_run_dirs([run_dir])
 
