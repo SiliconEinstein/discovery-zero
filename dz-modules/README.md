@@ -16,9 +16,9 @@
 │    Claim 提取·验证·    │  超图模型 · Bridge 层 ·         │
 │    Lean 形式化证明     │  工具链 · LLM · 沙箱            │
 ├────────────────────────┴────────────────────────────────┤
-│                   gaia-lang (外部依赖)                    │
-│  DSL Runtime → Compiler → IR → Validator → Lowering     │
-│                  → BP Engine (推理引擎)                   │
+│              gaia-lang (外部依赖，SiliconEinstein/Gaia)     │
+│  DSL Runtime (Knowledge/Strategy/Operator) → Compiler   │
+│  → IR → Validator → Lowering → BP Engine (推理引擎)      │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -50,6 +50,7 @@ BP 后验信念 → 写回 DZ Node.belief
 **关键设计决策：**
 
 - **不重新发明编译器**：DZ 不自己构建 IR，而是通过 Gaia DSL Runtime 声明 `Knowledge`/`Strategy`/`Operator`，由 Gaia 编译器生成真实的 `LocalCanonicalGraph`（含 QID 分配、`ir_hash` 计算、策略形式化）。
+- **推理算子全部来自 Gaia**：`contradiction`、`equivalence`、`deduction`、`infer` 等推理策略和约束算子均使用 Gaia DSL Runtime 的 `Strategy` 和 `Operator` 类型声明，由 Gaia 编译器负责形式化和因子图降低。DZ bridge 层仅负责从 DZ 超图的 `Module` 和 `edge_type` 映射到对应的 Gaia 策略类型（`formal`/`decomposition` → `deduction`，其余 → `infer`）。
 - **不重新发明 BP**：验证、降低（lowering）和推理全部委托给 Gaia 组件。升级 Gaia 即自动升级整条管线。
 - **DZ 特有逻辑在 bridge 层**：合情推理边去重（plausible dedup）、策略 ID 冲突合并、等价关系检测、p1 下界保护等 DZ 特有行为在桥接**之前**处理，编译器和推理引擎看到的是标准 Gaia 输入。
 - **产出物可供 Gaia 生态直接消费**：`save_gaia_artifacts()` 输出标准的 `.gaia/ir.json`、`ir_hash`、`parameterization.json` 和 `beliefs.json`，可被 Gaia 的 LKM 存储、校验等工具直接读取。
@@ -129,9 +130,10 @@ pip install -e packages/dz-mcp
 python -c "from dz_engine import run_discovery; print('OK')"
 ```
 
-> **注意**：`dz-hypergraph` 依赖 `gaia-lang`。如果你的环境还没有安装，需要先从 [gaia-bp](https://github.com/atom525/gaia-bp) 安装：
+> **注意**：`dz-hypergraph` 依赖 `gaia-lang`。如果你的环境还没有安装，需要先从 [Gaia](https://github.com/SiliconEinstein/Gaia) 安装：
 > ```bash
-> pip install -e /path/to/gaia-bp
+> git clone https://github.com/SiliconEinstein/Gaia.git
+> cd Gaia && pip install -e .
 > ```
 
 ### 第二步：配置 LLM
