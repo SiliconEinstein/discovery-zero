@@ -5,23 +5,54 @@
 ## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   dz-mcp (MCP Server)               │
-│          Cursor / Claude / 任何 MCP Agent           │
-├─────────────────────────────────────────────────────┤
-│                   dz-engine (核心引擎)               │
-│   MCTS · Bridge 规划 · 类比/特化/分解 · 专家迭代     │
-├──────────────────────┬──────────────────────────────┤
-│    dz-verify         │      dz-hypergraph           │
-│  Claim 提取·验证·    │  超图模型 · BP 推理 ·         │
-│  Lean 形式化证明     │  工具链 · LLM · 沙箱          │
-├──────────────────────┴──────────────────────────────┤
-│                 gaia-lang (外部依赖)                  │
-│            贝叶斯超图推理引擎 (Gaia BP)               │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                     dz-mcp (MCP Server)                 │
+│            Cursor / Claude / 任何 MCP Agent             │
+├─────────────────────────────────────────────────────────┤
+│                     dz-engine (核心引擎)                 │
+│     MCTS · Bridge 规划 · 类比/特化/分解 · 专家迭代       │
+├────────────────────────┬────────────────────────────────┤
+│      dz-verify         │        dz-hypergraph           │
+│    Claim 提取·验证·    │  超图模型 · Bridge 层 ·         │
+│    Lean 形式化证明     │  工具链 · LLM · 沙箱            │
+├────────────────────────┴────────────────────────────────┤
+│                   gaia-lang (外部依赖)                    │
+│  DSL Runtime → Compiler → IR → Validator → Lowering     │
+│                  → BP Engine (推理引擎)                   │
+└─────────────────────────────────────────────────────────┘
 ```
 
 依赖方向严格单向：`dz-hypergraph` ← `dz-verify` ← `dz-engine` ← `dz-mcp`。
+
+## Gaia IR 编译管线
+
+`dz-hypergraph` 通过 **bridge 层** 将 DZ 的操作层超图**编译为真实的 Gaia IR**，复用 Gaia 仓库的全套后端生态。整个管线如下：
+
+```
+DZ HyperGraph (Node/Hyperedge)
+        │
+        ▼  bridge.py: bridge_to_gaia()
+Gaia DSL Runtime (Knowledge/Strategy/Operator)
+        │
+        ▼  gaia.lang.compiler.compile_package_artifact()
+Gaia IR: LocalCanonicalGraph (带 ir_hash)
+        │
+        ├─▶ gaia.ir.validator.validate_local_graph()        ← IR 结构验证
+        ├─▶ gaia.ir.validator.validate_parameterization()   ← 参数化验证
+        │
+        ▼  gaia.bp.lowering.lower_local_graph()
+Gaia FactorGraph (变量 + 因子)
+        │
+        ▼  gaia.bp.engine.InferenceEngine.run()
+BP 后验信念 → 写回 DZ Node.belief
+```
+
+**关键设计决策：**
+
+- **不重新发明编译器**：DZ 不自己构建 IR，而是通过 Gaia DSL Runtime 声明 `Knowledge`/`Strategy`/`Operator`，由 Gaia 编译器生成真实的 `LocalCanonicalGraph`（含 QID 分配、`ir_hash` 计算、策略形式化）。
+- **不重新发明 BP**：验证、降低（lowering）和推理全部委托给 Gaia 组件。升级 Gaia 即自动升级整条管线。
+- **DZ 特有逻辑在 bridge 层**：合情推理边去重（plausible dedup）、策略 ID 冲突合并、等价关系检测、p1 下界保护等 DZ 特有行为在桥接**之前**处理，编译器和推理引擎看到的是标准 Gaia 输入。
+- **产出物可供 Gaia 生态直接消费**：`save_gaia_artifacts()` 输出标准的 `.gaia/ir.json`、`ir_hash`、`parameterization.json` 和 `beliefs.json`，可被 Gaia 的 LKM 存储、校验等工具直接读取。
 
 ## 四大组件
 
@@ -31,7 +62,9 @@
 
 **核心能力：**
 - **超图数据模型** — `Node`（命题）+ `Hyperedge`（推理步骤），支持序列化/持久化
-- **贝叶斯置信传播 (BP)** — 基于 Gaia v2 的消息传递推理，支持增量传播
+- **Gaia IR 编译桥接** — `bridge_to_gaia()` 将 DZ 超图编译为真实 Gaia IR (`LocalCanonicalGraph`)，复用 Gaia 编译器、验证器、降低器和推理引擎
+- **贝叶斯置信传播 (BP)** — 完整的 Gaia 管线：编译 → 验证 → 降低 → 推理，支持增量传播和缓存
+- **Gaia 产出物导出** — `save_gaia_artifacts()` 输出标准 `.gaia/` 目录结构（`ir.json`、参数化、信念快照），可供 Gaia 生态直接消费
 - **信念缺口分析** — 识别推理链中置信度最薄弱的环节
 - **LLM 工具链** — 统一的 LLM 调用层，支持流式输出、自动续写、结构化输出、Token 预算控制
 - **实验沙箱** — 安全执行 LLM 生成的 Python 代码，支持受控数据注入
@@ -365,10 +398,35 @@ Hyperedge(
 
 **Module 枚举：** `PLAUSIBLE`, `EXPERIMENT`, `LEAN`, `ANALOGY`, `DECOMPOSE`, `SPECIALIZE`, `RETRIEVE`
 
-**edge_type 语义：**
-- `"heuristic"` → BP 用 `SOFT_ENTAILMENT`（可信度按 confidence 加权）
-- `"formal"` → BP 用 `IMPLICATION`（近似确定性推理）
-- `"decomposition"` → BP 跳过（子问题分解不参与消息传递）
+**edge_type → Gaia IR 策略映射：**
+- `"heuristic"` → Gaia Strategy `type="infer"` → 降低为 `CONJUNCTION + SOFT_ENTAILMENT` 因子（可信度按 confidence 加权）
+- `"formal"` → Gaia Strategy `type="deduction"` → 降低为 `IMPLICATION` 因子（近似确定性推理）
+- `"decomposition"` → Gaia Strategy `type="deduction"` → 降低为 `CONJUNCTION + IMPLICATION` 因子
+
+### Gaia IR Bridge API
+
+```python
+from dz_hypergraph import bridge_to_gaia, export_as_gaia_ir, save_gaia_artifacts
+
+# bridge_to_gaia: DZ 超图 → 编译后的 Gaia IR
+result = bridge_to_gaia(graph)
+result.compiled.graph        # gaia.ir.LocalCanonicalGraph (真实 IR)
+result.compiled.graph.ir_hash  # sha256 哈希
+result.node_priors           # {qid: float} — 各节点先验
+result.strategy_params       # {strategy_id: [cpt]} — 各策略条件概率
+result.dz_id_to_qid          # DZ node ID → Gaia QID 映射
+result.prior_records          # list[PriorRecord] — Gaia 参数化验证输入
+result.strategy_param_records # list[StrategyParamRecord] — 同上
+
+# save_gaia_artifacts: 持久化到 .gaia/ 目录
+from pathlib import Path
+save_gaia_artifacts(graph, Path("output/"))
+# 产出：
+#   output/.gaia/ir.json                              — 完整 LocalCanonicalGraph
+#   output/.gaia/ir_hash                              — ir_hash 值
+#   output/.gaia/reviews/dz_bridge/parameterization.json  — 参数化
+#   output/.gaia/beliefs.json                         — 当前信念快照
+```
 
 ---
 
@@ -387,15 +445,17 @@ Hyperedge(
 | `DISCOVERY_ZERO_LLM_STREAMING` | `true` | 流式输出 |
 | `DISCOVERY_ZERO_MAX_OUTPUT_TOKENS` | `16000` | 最大输出 token |
 
-### BP 配置
+### BP / Gaia IR 配置
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `DISCOVERY_ZERO_BP_BACKEND` | `gaia_v2` | BP 后端（`gaia_v2` 或 `gaia`） |
+| `DISCOVERY_ZERO_BP_BACKEND` | `gaia_v2` | BP 后端（`gaia_v2` 或 `energy`） |
 | `DISCOVERY_ZERO_BP_MAX_ITERATIONS` | `50` | 最大 BP 迭代次数 |
 | `DISCOVERY_ZERO_BP_DAMPING` | `0.5` | 阻尼系数（防止振荡） |
 | `DISCOVERY_ZERO_BP_TOLERANCE` | `1e-6` | 收敛容差 |
 | `DISCOVERY_ZERO_BP_INCREMENTAL` | `true` | 增量 BP（仅传播受影响子图） |
+| `DISCOVERY_ZERO_INFERENCE_METHOD` | `auto` | Gaia BP 推理方法（`auto`/`jt`/`gbp`/`loopy`） |
+| `DISCOVERY_ZERO_BP_USE_FULL_CPT` | `false` | 是否使用完整条件概率表（`false` = degraded noisy-and，与原系统行为一致） |
 
 ### MCTS 配置
 
@@ -469,7 +529,15 @@ python -m mypy packages/dz-hypergraph/src packages/dz-verify/src packages/dz-eng
 
 ### Q: BP 底层是什么？和 Gaia 是什么关系？
 
-BP 底层 **就是** Gaia BP。`dz-hypergraph` 的 `propagate_beliefs()` 通过 adapter 层将 HyperGraph 转换为 Gaia 的 `FactorGraph`，然后直接调用 `gaia.bp.engine.InferenceEngine`（v2）或 `gaia.bp.bp.BeliefPropagation`（v1）。升级 Gaia 即自动升级 BP。
+BP 底层 **就是** Gaia。`dz-hypergraph` 通过 `bridge_to_gaia()` 将 DZ 超图**编译为真实的 Gaia IR** (`LocalCanonicalGraph`)，然后依次调用 Gaia 的原生组件：
+
+1. `gaia.lang.compiler.compile_package_artifact()` — 编译为 IR（含 QID、`ir_hash`）
+2. `gaia.ir.validator.validate_local_graph()` — 结构验证
+3. `gaia.ir.validator.validate_parameterization()` — 参数化验证
+4. `gaia.bp.lowering.lower_local_graph()` — 降低为 FactorGraph
+5. `gaia.bp.engine.InferenceEngine.run()` — 执行 BP（自动选择 Junction Tree / 广义 BP / 环路 BP）
+
+不存在任何自定义编译器或 BP 实现。升级 Gaia 即自动升级编译、验证和推理的全部能力。
 
 ### Q: 不配 Lean 能用吗？
 
@@ -499,10 +567,12 @@ for eid, edge in graph.edges.items():
 ## 设计原则
 
 1. **零简化** — 从 Discovery-Zero-v2 完整复制，不删减任何功能路径
-2. **单向依赖** — 严格的层级依赖，无循环引用
-3. **配置集中管理** — 所有阈值、超参数通过 `ZeroConfig` 统一管控，支持环境变量覆盖
-4. **真实执行** — 不存在任何模拟、虚拟、默认通过的代码路径
-5. **行为兼容** — 解耦后的模块组合行为与原始单体完全一致
+2. **编译到真实 Gaia IR** — 通过 Gaia 编译器生成标准 `LocalCanonicalGraph`，不存在自定义 IR 或绕过编译的代码路径；验证、降低和推理全部复用 Gaia 原生组件
+3. **单向依赖** — 严格的层级依赖，无循环引用
+4. **配置集中管理** — 所有阈值、超参数通过 `ZeroConfig` 统一管控，支持环境变量覆盖
+5. **真实执行** — 不存在任何模拟、虚拟、默认通过的代码路径
+6. **行为兼容** — 解耦后的模块组合行为与原始单体完全一致
+7. **Gaia 生态可消费** — `save_gaia_artifacts()` 产出标准 `.gaia/` 目录（`ir.json`、`ir_hash`、参数化、信念快照），可被 Gaia 的 LKM 存储、校验工具等直接读取
 
 ## 许可
 

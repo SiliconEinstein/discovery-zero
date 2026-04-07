@@ -1,6 +1,7 @@
 """Hypergraph package for Discovery Zero modular stack."""
 
 from dz_hypergraph.belief_gap import BeliefGapAnalyser
+from dz_hypergraph.bridge import BridgeResult, bridge_to_gaia
 from dz_hypergraph.bridge_models import (
     BridgePlan,
     BridgeProposition,
@@ -19,7 +20,12 @@ from dz_hypergraph.models import (
     NodeState,
     canonicalize_statement_text,
 )
-from dz_hypergraph.persistence import load_graph, save_graph
+from dz_hypergraph.persistence import (
+    export_as_gaia_ir,
+    load_graph,
+    save_gaia_artifacts,
+    save_graph,
+)
 
 
 def create_graph() -> HyperGraph:

@@ -1,148 +1,96 @@
-"""Tests for the Zero <-> Gaia adapter layer."""
+"""Tests for DZ -> Gaia IR bridge pipeline."""
 
 import pytest
 
+from gaia.bp.factor_graph import CROMWELL_EPS, FactorType
+from gaia.bp.lowering import lower_local_graph
+
+from dz_hypergraph.bridge import bridge_to_gaia
 from dz_hypergraph.models import HyperGraph, Module
-from dz_hypergraph.adapter import (
-    adapt_zero_graph,
-    run_gaia_bp,
-    write_back_beliefs,
-    InferenceResult,
-    ZeroInferenceGraph,
-)
-from gaia.bp.factor_graph import CROMWELL_EPS
 
 
-class TestAdaptZeroGraph:
-    def test_empty_graph(self):
-        g = HyperGraph()
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.variables) == 0
-        assert len(zig.factor_graph.factors) == 0
+def test_bridge_single_edge_lowers_to_soft_entailment():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.9, prior=0.9)
+    b = graph.add_node("B", belief=0.5, prior=0.5)
+    graph.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["s"], confidence=0.8)
 
-    def test_single_node(self):
-        g = HyperGraph()
-        g.add_node("A is true", belief=0.6, prior=0.6)
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.variables) == 1
-        assert len(zig.factor_graph.factors) == 0
-
-    def test_linear_chain(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.9, prior=0.9)
-        b = g.add_node("B", belief=0.5, prior=0.5)
-        c = g.add_node("C", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["step1"], confidence=0.8)
-        g.add_hyperedge([b.id], c.id, Module.PLAUSIBLE, ["step2"], confidence=0.7)
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.variables) == 3
-        assert len(zig.factor_graph.factors) == 2
-
-    def test_diamond_dag(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.9, prior=0.9)
-        b = g.add_node("B", belief=0.5, prior=0.5)
-        c = g.add_node("C", belief=0.5, prior=0.5)
-        d = g.add_node("D", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["s1"], confidence=0.8)
-        g.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["s2"], confidence=0.7)
-        g.add_hyperedge([b.id, c.id], d.id, Module.PLAUSIBLE, ["s3"], confidence=0.6)
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.variables) == 5
-        assert len(zig.factor_graph.factors) == 4
-        assert len(zig.synthetic_var_ids) == 1
-
-    def test_decomposition_edges_excluded(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.5, prior=0.5)
-        b = g.add_node("B", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.LEAN, ["decomp"], confidence=0.95, edge_type="decomposition")
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.factors) == 0
-        assert len(zig.excluded_edge_ids) == 1
-
-    def test_proven_node_clamped(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=1.0, prior=1.0, state="proven")
-        zig = adapt_zero_graph(g)
-        var_id = zig.node_id_to_var_id[a.id]
-        prior_value = zig.factor_graph.variables[var_id]
-        assert prior_value == pytest.approx(1.0 - CROMWELL_EPS, abs=1e-6)
-
-    def test_refuted_node_clamped(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.0, prior=0.0, state="refuted")
-        zig = adapt_zero_graph(g)
-        var_id = zig.node_id_to_var_id[a.id]
-        prior_value = zig.factor_graph.variables[var_id]
-        assert prior_value == pytest.approx(CROMWELL_EPS, abs=1e-6)
-
-    def test_mixed_edge_types(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.9, prior=0.9, state="proven")
-        b = g.add_node("B", belief=0.5, prior=0.5)
-        c = g.add_node("C", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["heuristic"], confidence=0.7)
-        g.add_hyperedge([a.id], c.id, Module.LEAN, ["formal"], confidence=0.99)
-        zig = adapt_zero_graph(g)
-        assert len(zig.factor_graph.factors) == 2
-
-    def test_id_mappings_bijective(self):
-        g = HyperGraph()
-        for i in range(5):
-            g.add_node(f"Node {i}", belief=0.5, prior=0.5)
-        zig = adapt_zero_graph(g)
-        assert len(zig.node_id_to_var_id) == 5
-        assert len(zig.var_id_to_node_id) == 5
-        for nid, var_id in zig.node_id_to_var_id.items():
-            assert zig.var_id_to_node_id[var_id] == nid
+    bridged = bridge_to_gaia(graph)
+    fg = lower_local_graph(
+        bridged.compiled.graph,
+        node_priors=bridged.node_priors,
+        strategy_conditional_params=bridged.strategy_params,
+        infer_use_degraded_noisy_and=True,
+    )
+    assert any(f.factor_type == FactorType.SOFT_ENTAILMENT for f in fg.factors)
 
 
-class TestWriteBackBeliefs:
-    def test_unlocked_nodes_updated(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.5, prior=0.5)
-        result = InferenceResult(node_beliefs={a.id: 0.8})
-        write_back_beliefs(g, result)
-        assert g.nodes[a.id].belief == pytest.approx(0.8)
+def test_bridge_dedup_plausible_edges():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.8, prior=0.8)
+    b = graph.add_node("B", belief=0.75, prior=0.75)
+    c = graph.add_node("C", belief=0.4, prior=0.4)
+    graph.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["a->c"], confidence=0.9, edge_type="heuristic")
+    graph.add_hyperedge([b.id], c.id, Module.PLAUSIBLE, ["b->c"], confidence=0.7, edge_type="heuristic")
 
-    def test_locked_nodes_not_updated(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=1.0, prior=1.0, state="proven")
-        result = InferenceResult(node_beliefs={a.id: 0.5})
-        write_back_beliefs(g, result)
-        assert g.nodes[a.id].belief == 1.0
-
-    def test_beliefs_clamped(self):
-        from gaia.bp.factor_graph import CROMWELL_EPS
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.5, prior=0.5)
-        result = InferenceResult(node_beliefs={a.id: 1.5})
-        write_back_beliefs(g, result)
-        assert g.nodes[a.id].belief == pytest.approx(1.0 - CROMWELL_EPS, abs=1e-9)
+    bridged = bridge_to_gaia(graph)
+    infer_ids = [s.strategy_id for s in bridged.compiled.graph.strategies if s.type.value == "infer"]
+    assert len(infer_ids) == 1
 
 
-class TestRunGaiaBp:
-    def test_simple_chain_propagation(self):
-        g = HyperGraph()
-        a = g.add_node("Axiom", belief=0.95, prior=0.95)
-        b = g.add_node("Conjecture", belief=0.5, prior=0.5)
-        g.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["reasoning"], confidence=0.8)
-        result = run_gaia_bp(g)
-        assert result.node_beliefs[b.id] > 0.5
+def test_bridge_collision_prefers_experiment_p2():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.9, prior=0.9)
+    b = graph.add_node("B", belief=0.2, prior=0.2)
+    graph.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["p"], confidence=0.6, edge_type="heuristic")
+    graph.add_hyperedge([a.id], b.id, Module.EXPERIMENT, ["e"], confidence=0.8, edge_type="heuristic")
 
-    def test_multiple_support_edges(self):
-        g = HyperGraph()
-        a = g.add_node("A", belief=0.8, prior=0.8)
-        b = g.add_node("B", belief=0.7, prior=0.7)
-        c = g.add_node("C", belief=0.3, prior=0.3)
-        g.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["s1"], confidence=0.6)
-        g.add_hyperedge([b.id], c.id, Module.EXPERIMENT, ["s2"], confidence=0.7)
-        result = run_gaia_bp(g)
-        assert result.node_beliefs[c.id] > 0.3
+    bridged = bridge_to_gaia(graph)
+    assert len(bridged.strategy_params) == 1
+    cpt = next(iter(bridged.strategy_params.values()))
+    assert cpt[0] == pytest.approx(CROMWELL_EPS, abs=1e-9)
 
-    def test_empty_graph_returns_empty(self):
-        g = HyperGraph()
-        result = run_gaia_bp(g)
-        assert result.node_beliefs == {}
-        assert result.converged is True
+
+def test_bridge_equivalence_creates_synthetic_relation_node():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.4, prior=0.4)
+    b = graph.add_node("B", belief=0.4, prior=0.4)
+    graph.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["ab"], confidence=0.7)
+    graph.add_hyperedge([b.id], a.id, Module.PLAUSIBLE, ["ba"], confidence=0.7)
+
+    bridged = bridge_to_gaia(graph)
+    assert bridged.synthetic_qids
+
+    fg = lower_local_graph(
+        bridged.compiled.graph,
+        node_priors=bridged.node_priors,
+        strategy_conditional_params=bridged.strategy_params,
+        infer_use_degraded_noisy_and=True,
+    )
+    assert any(f.factor_type == FactorType.EQUIVALENCE for f in fg.factors)
+
+
+def test_bridge_decomposition_maps_to_deduction_implication():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.9, prior=0.9)
+    b = graph.add_node("B", belief=0.2, prior=0.2)
+    graph.add_hyperedge([a.id], b.id, Module.DECOMPOSE, ["d"], confidence=0.6, edge_type="decomposition")
+    bridged = bridge_to_gaia(graph)
+    fg = lower_local_graph(
+        bridged.compiled.graph,
+        node_priors=bridged.node_priors,
+        strategy_conditional_params=bridged.strategy_params,
+        infer_use_degraded_noisy_and=True,
+    )
+    assert any(f.factor_type == FactorType.IMPLICATION for f in fg.factors)
+
+
+def test_bridge_parameterization_record_types():
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.9, prior=0.9)
+    b = graph.add_node("B", belief=0.2, prior=0.2)
+    graph.add_hyperedge([a.id], b.id, Module.PLAUSIBLE, ["s"], confidence=0.8)
+    bridged = bridge_to_gaia(graph)
+    assert bridged.prior_records
+    assert all(hasattr(item, "knowledge_id") for item in bridged.prior_records)
+    assert all(hasattr(item, "strategy_id") for item in bridged.strategy_param_records)

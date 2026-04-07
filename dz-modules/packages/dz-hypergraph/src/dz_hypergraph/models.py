@@ -56,7 +56,7 @@ class OperatorType(str, Enum):
 
     Per Gaia theory (03-propositional-operators.md §4), heuristic edges compile
     to SOFT_ENTAILMENT ↝(p₁, p₂).  The adapter does not read this field; it
-    maps edge_type + edge.confidence to Gaia factors (see adapter_v2).
+    maps edge_type + edge.confidence to Gaia factors (see bridge.py).
     """
 
     ENTAILMENT = "entailment"
@@ -164,6 +164,8 @@ class HyperGraph(BaseModel):
 
     nodes: dict[str, Node] = Field(default_factory=dict)
     edges: dict[str, Hyperedge] = Field(default_factory=dict)
+    version: int = 0
+    _instance_uid: str = PrivateAttr(default_factory=lambda: uuid.uuid4().hex)
 
     # Private adjacency indices — not serialised, rebuilt from edges on load
     _edges_to: dict[str, list[str]] = PrivateAttr(default_factory=dict)
@@ -180,6 +182,10 @@ class HyperGraph(BaseModel):
             self._edges_to.setdefault(edge.conclusion_id, []).append(eid)
             for pid in edge.premise_ids:
                 self._edges_from.setdefault(pid, []).append(eid)
+
+    def touch(self) -> None:
+        """Mark graph as mutated for cache invalidation."""
+        self.version += 1
 
     def add_node(
         self,
@@ -208,6 +214,7 @@ class HyperGraph(BaseModel):
             memo_ref=memo_ref,
         )
         self.nodes[node.id] = node
+        self.touch()
         return node
 
     def find_node_ids_by_statement(
@@ -270,6 +277,7 @@ class HyperGraph(BaseModel):
         self._edges_to.setdefault(edge.conclusion_id, []).append(edge.id)
         for pid in premise_ids:
             self._edges_from.setdefault(pid, []).append(edge.id)
+        self.touch()
         return edge
 
     def remove_edge(self, edge_id: str) -> Optional["Hyperedge"]:
@@ -285,6 +293,7 @@ class HyperGraph(BaseModel):
             from_list = self._edges_from.get(pid, [])
             if edge_id in from_list:
                 from_list.remove(edge_id)
+        self.touch()
         return edge
 
     def get_edges_to(self, node_id: str) -> list[str]:

@@ -450,12 +450,11 @@ class ExpertIterationLoop:
                 if not r.graph_snapshot_json or not r.next_graph_snapshot_json:
                     continue
                 try:
-                    from dz_hypergraph.adapter import run_gaia_bp, write_back_beliefs
+                    from dz_hypergraph.inference import propagate_beliefs
                     graph = HyperGraph.model_validate_json(r.graph_snapshot_json)
                     next_graph = HyperGraph.model_validate_json(r.next_graph_snapshot_json)
 
-                    result = run_gaia_bp(graph)
-                    write_back_beliefs(graph, result)
+                    propagate_beliefs(graph, warmstart=False)
                     standard = {nid: node.belief for nid, node in graph.nodes.items()}
                     true_b = {nid: node.belief for nid, node in next_graph.nodes.items()}
 
