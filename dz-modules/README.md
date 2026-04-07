@@ -83,8 +83,8 @@
 ### 第一步：安装
 
 ```bash
-git clone https://github.com/atom525/discovery-zero-v.2.git
-cd discovery-zero-v.2/dz-modules
+git clone https://github.com/SiliconEinstein/discovery-zero.git
+cd discovery-zero/dz-modules
 
 # 按顺序安装（需要 Python ≥ 3.12）
 pip install -e packages/dz-hypergraph
