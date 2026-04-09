@@ -29,7 +29,7 @@ def _sanitize_label(raw_id: str) -> str:
     return label
 
 P2_MAXENT_NEUTRAL_SOFT_ENTAILMENT: float = 0.5
-PLAUSIBLE_DEDUP_JACCARD_THRESHOLD: float = 0.7
+PLAUSIBLE_DEDUP_DECAY: float = 0.3
 
 
 @dataclass
@@ -67,7 +67,7 @@ def _module_value(edge: Hyperedge) -> str:
 
 
 def _edge_is_deterministic(edge: _BridgeEdge) -> bool:
-    return edge.edge_type in {"formal"}
+    return edge.edge_type in {"formal", "decomposition"}
 
 
 def _derive_p2_soft_entailment(edge: _BridgeEdge) -> float:
@@ -163,52 +163,44 @@ def _deduplicate_plausible(raw_edges: list[tuple[str, Hyperedge, list[str]]]) ->
     deduped: list[_BridgeEdge] = []
 
     for eid, edge, premises in raw_edges:
-        if _module_value(edge) != "plausible" or edge.edge_type in {"formal"}:
+        if _module_value(edge) != "plausible" or edge.edge_type in {"formal", "decomposition"}:
             continue
         plausible_groups.setdefault(edge.conclusion_id, []).append((eid, edge, premises))
 
     for group in plausible_groups.values():
         if len(group) <= 1:
             continue
-        premise_sets = [set(premises) for _, _, premises in group]
-        merged_flags = [False] * len(group)
-        for i in range(len(group)):
-            if merged_flags[i]:
-                continue
-            cluster = [i]
-            for j in range(i + 1, len(group)):
-                if merged_flags[j]:
-                    continue
-                union_size = len(premise_sets[i] | premise_sets[j])
-                jaccard = len(premise_sets[i] & premise_sets[j]) / union_size if union_size else 0
-                if jaccard >= PLAUSIBLE_DEDUP_JACCARD_THRESHOLD:
-                    cluster.append(j)
-                    merged_flags[j] = True
-            if len(cluster) == 1:
-                continue
-            cluster.sort(key=lambda idx: float(group[idx][1].confidence), reverse=True)
-            best_idx = cluster[0]
-            best_eid, best_edge, best_premises = group[best_idx]
-            for idx in cluster:
-                consumed.add(group[idx][0])
-            deduped.append(
-                _BridgeEdge(
-                    premise_ids=list(best_premises),
-                    conclusion_id=best_edge.conclusion_id,
-                    module=_module_value(best_edge),
-                    edge_type=best_edge.edge_type,
-                    confidence=float(best_edge.confidence),
-                    steps=list(best_edge.steps),
-                    review_confidence=best_edge.review_confidence,
-                    merged_edge_ids=[group[idx][0] for idx in cluster],
-                )
+        group.sort(key=lambda item: float(item[1].confidence), reverse=True)
+        best_eid, best_edge, _ = group[0]
+        premise_union: list[str] = []
+        seen: set[str] = set()
+        for eid, edge, premises in group:
+            consumed.add(eid)
+            for pid in premises:
+                if pid not in seen:
+                    seen.add(pid)
+                    premise_union.append(pid)
+        if not premise_union:
+            continue
+        p1_best = float(best_edge.confidence)
+        p1_effective = 1.0 - (1.0 - p1_best) * (PLAUSIBLE_DEDUP_DECAY ** (len(group) - 1))
+        deduped.append(
+            _BridgeEdge(
+                premise_ids=premise_union,
+                conclusion_id=best_edge.conclusion_id,
+                module=_module_value(best_edge),
+                edge_type=best_edge.edge_type,
+                confidence=p1_effective,
+                steps=list(best_edge.steps),
+                review_confidence=best_edge.review_confidence,
+                merged_edge_ids=[eid for eid, _, _ in group],
             )
-            logger.info(
-                "Deduplicated %d plausible edges (Jaccard >= %.1f) into representative %s",
-                len(cluster),
-                PLAUSIBLE_DEDUP_JACCARD_THRESHOLD,
-                best_eid,
-            )
+        )
+        logger.info(
+            "Deduplicated %d plausible edges into representative %s",
+            len(group),
+            best_eid,
+        )
 
     for eid, edge, premises in raw_edges:
         if eid in consumed:

@@ -227,7 +227,6 @@ class ZeroConfig:
     # Dedicated model for claim verification code generation.
     # Should be a fast model with strong Python/math code ability (e.g. gpt-4o, gpt-4.1).
     # Defaults to empty (uses main model) if not set.
-    judge_model: str = _env("DISCOVERY_ZERO_JUDGE_MODEL", "")
     claim_verification_model: str = _env("DISCOVERY_ZERO_CLAIM_VERIFICATION_MODEL", "")
     claim_verification_max_claims: int = _env_int("DISCOVERY_ZERO_CLAIM_VERIFICATION_MAX_CLAIMS", 3)
     claim_extraction_model: str = _env("DISCOVERY_ZERO_CLAIM_EXTRACTION_MODEL", "")
@@ -235,7 +234,7 @@ class ZeroConfig:
     verification_parallel_workers: int = _env_int("DISCOVERY_ZERO_VERIFICATION_PARALLEL_WORKERS", 3)
     verification_loop_enabled: bool = _env_bool("DISCOVERY_ZERO_VERIFICATION_LOOP_ENABLED", True)
     lean_feedback_enabled: bool = _env_bool("DISCOVERY_ZERO_LEAN_FEEDBACK_ENABLED", True)
-    unverified_claim_prior: float = _env_float("DISCOVERY_ZERO_UNVERIFIED_CLAIM_PRIOR", 0.5)
+    unverified_claim_prior: float = _env_float("DISCOVERY_ZERO_UNVERIFIED_CLAIM_PRIOR", 0.15)
     default_confidence_plausible: float = _env_float("DISCOVERY_ZERO_DEFAULT_CONFIDENCE_PLAUSIBLE", 0.5)
     default_confidence_experiment: float = _env_float("DISCOVERY_ZERO_DEFAULT_CONFIDENCE_EXPERIMENT", 0.85)
     default_confidence_lean: float = _env_float("DISCOVERY_ZERO_DEFAULT_CONFIDENCE_LEAN", 0.99)

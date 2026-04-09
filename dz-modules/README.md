@@ -50,7 +50,7 @@ BP 后验信念 → 写回 DZ Node.belief
 **关键设计决策：**
 
 - **不重新发明编译器**：DZ 不自己构建 IR，而是通过 Gaia DSL Runtime 声明 `Knowledge`/`Strategy`/`Operator`，由 Gaia 编译器生成真实的 `LocalCanonicalGraph`（含 QID 分配、`ir_hash` 计算、策略形式化）。
-- **推理算子全部来自 Gaia**：`contradiction`、`equivalence`、`deduction`、`infer` 等推理策略和约束算子均使用 Gaia DSL Runtime 的 `Strategy` 和 `Operator` 类型声明，由 Gaia 编译器负责形式化和因子图降低。DZ bridge 层仅负责从 DZ 超图的 `Module` 和 `edge_type` 映射到对应的 Gaia 策略类型（`formal` → `deduction`，`heuristic`/`decomposition` 等 → `infer`）。
+- **推理算子全部来自 Gaia**：`contradiction`、`equivalence`、`deduction`、`infer` 等推理策略和约束算子均使用 Gaia DSL Runtime 的 `Strategy` 和 `Operator` 类型声明，由 Gaia 编译器负责形式化和因子图降低。DZ bridge 层仅负责从 DZ 超图的 `Module` 和 `edge_type` 映射到对应的 Gaia 策略类型（`formal`/`decomposition` → `deduction`，其余 → `infer`）。
 - **不重新发明 BP**：验证、降低（lowering）和推理全部委托给 Gaia 组件。升级 Gaia 即自动升级整条管线。
 - **DZ 特有逻辑在 bridge 层**：合情推理边去重（plausible dedup）、策略 ID 冲突合并、等价关系检测、p1 下界保护等 DZ 特有行为在桥接**之前**处理，编译器和推理引擎看到的是标准 Gaia 输入。
 - **产出物可供 Gaia 生态直接消费**：`save_gaia_artifacts()` 输出标准的 `.gaia/ir.json`、`ir_hash`、`parameterization.json` 和 `beliefs.json`，可被 Gaia 的 LKM 存储、校验等工具直接读取。
@@ -403,7 +403,7 @@ Hyperedge(
 **edge_type → Gaia IR 策略映射：**
 - `"heuristic"` → Gaia Strategy `type="infer"` → 降低为 `CONJUNCTION + SOFT_ENTAILMENT` 因子（可信度按 confidence 加权）
 - `"formal"` → Gaia Strategy `type="deduction"` → 降低为 `IMPLICATION` 因子（近似确定性推理）
-- `"decomposition"` → Gaia Strategy `type="infer"` → 降低为 `CONJUNCTION + SOFT_ENTAILMENT` 因子（与 heuristic 一致，计划分解非确定性推理）
+- `"decomposition"` → Gaia Strategy `type="deduction"` → 降低为 `CONJUNCTION + IMPLICATION` 因子
 
 ### Gaia IR Bridge API
 
@@ -474,8 +474,7 @@ save_gaia_artifacts(graph, Path("output/"))
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `DISCOVERY_ZERO_UNVERIFIED_CLAIM_PRIOR` | `0.5` | 新 Claim 节点的默认先验（MaxEnt） |
-| `DISCOVERY_ZERO_JUDGE_MODEL` | （空） | 独立 Judge 模型，实现构造/验证分离 |
+| `DISCOVERY_ZERO_UNVERIFIED_CLAIM_PRIOR` | `0.15` | 新 Claim 节点的默认先验 |
 | `DISCOVERY_ZERO_EXPERIMENT_PRIOR_CAP` | `0.85` | 实验验证后的先验上限 |
 | `DISCOVERY_ZERO_VERIFIED_PRIOR_FLOOR` | `0.45` | LLM judge 验证后的先验下限 |
 | `DISCOVERY_ZERO_REFUTATION_PRIOR_MULTIPLIER` | `0.3` | 非形式化反驳的先验衰减系数 |
