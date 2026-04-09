@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 # Gaia 06-factor-graphs §3.7: when M=0, ψ(0,0)=p2 and ψ(0,1)=1−p2; p2=0.5 gives
 # uniform row — "premise absent provides no directional evidence" (07-bp §2.3 C4).
 P2_MAXENT_NEUTRAL_SOFT_ENTAILMENT: float = 0.5
-PLAUSIBLE_DEDUP_DECAY: float = 0.3
+# Jaccard similarity threshold: edges sharing the same conclusion with premise
+# overlap >= this value are considered redundant and merged (take max confidence).
+# Low-overlap edges remain independent factors — BP handles multi-evidence
+# convergence naturally via message passing.
+PLAUSIBLE_DEDUP_JACCARD_THRESHOLD: float = 0.7
 
 
 def _module_value(edge: Hyperedge) -> str:
@@ -32,7 +36,7 @@ def _module_value(edge: Hyperedge) -> str:
 
 
 def _edge_is_deterministic(edge: Hyperedge) -> bool:
-    return edge.edge_type in {"formal", "decomposition"}
+    return edge.edge_type in {"formal"}
 
 
 def _derive_p2_soft_entailment(edge: Hyperedge) -> float:
@@ -164,74 +168,82 @@ def adapt_zero_graph_v2(
             prior = CROMWELL_EPS
         fg.add_variable(nid, prior)
 
-    plausible_groups: dict[tuple[str, str], list[tuple[str, Hyperedge]]] = {}
+    plausible_groups: dict[str, list[tuple[str, Hyperedge, set[str]]]] = {}
     grouped_plausible_eids: set[str] = set()
     for eid, edge in graph.edges.items():
         if (
             _module_value(edge) == "plausible"
-            and edge.edge_type not in {"formal", "decomposition"}
+            and edge.edge_type not in {"formal"}
             and edge.conclusion_id in fg.variables
             and any(pid in fg.variables for pid in edge.premise_ids)
         ):
-            key = (edge.conclusion_id, _module_value(edge))
-            plausible_groups.setdefault(key, []).append((eid, edge))
+            valid_pids = frozenset(pid for pid in edge.premise_ids if pid in fg.variables)
+            plausible_groups.setdefault(edge.conclusion_id, []).append(
+                (eid, edge, set(valid_pids))
+            )
 
-    for group in plausible_groups.values():
+    for conclusion_id, group in plausible_groups.items():
         if len(group) <= 1:
             continue
-        for eid, _ in group:
-            grouped_plausible_eids.add(eid)
-        group.sort(key=lambda item: float(item[1].confidence), reverse=True)
-        best_eid, best_edge = group[0]
-        conclusion = best_edge.conclusion_id
-        premise_union: list[str] = []
-        seen: set[str] = set()
-        for _eid, edge in group:
-            for pid in edge.premise_ids:
-                if pid in fg.variables and pid not in seen:
-                    seen.add(pid)
-                    premise_union.append(pid)
-        if not premise_union:
-            continue
-        p2_group = _derive_p2_soft_entailment(best_edge)
-        p1_best = float(best_edge.confidence)
-        p1_effective_raw = 1.0 - (1.0 - p1_best) * (PLAUSIBLE_DEDUP_DECAY ** (len(group) - 1))
-        p1_effective = _effective_p1_from_raw(p1_effective_raw, p2_group, edge_id=best_eid)
-        dedup_eid = f"{best_eid}_dedup"
-        if len(premise_union) == 1:
-            try:
-                fg.add_factor(
-                    dedup_eid,
-                    FactorType.SOFT_ENTAILMENT,
-                    premise_union,
-                    conclusion,
-                    p1=p1_effective,
-                    p2=p2_group,
-                )
-            except ValueError as exc:
-                logger.warning("Skipping deduplicated SOFT_ENTAILMENT %s: %s", dedup_eid, exc)
-            continue
-        mediator = f"{dedup_eid}_M"
-        if mediator not in fg.variables:
-            fg.add_variable(mediator, 0.5)
-        synthetic_var_ids.add(mediator)
-        try:
-            fg.add_factor(
-                f"{dedup_eid}_conj",
-                FactorType.CONJUNCTION,
-                premise_union,
-                mediator,
-            )
-            fg.add_factor(
-                dedup_eid,
-                FactorType.SOFT_ENTAILMENT,
-                [mediator],
-                conclusion,
-                p1=p1_effective,
-                p2=p2_group,
-            )
-        except ValueError as exc:
-            logger.warning("Skipping deduplicated multi-premise factor %s: %s", dedup_eid, exc)
+        merged = [False] * len(group)
+        for i in range(len(group)):
+            if merged[i]:
+                continue
+            cluster = [i]
+            for j in range(i + 1, len(group)):
+                if merged[j]:
+                    continue
+                union_size = len(group[i][2] | group[j][2])
+                jaccard = len(group[i][2] & group[j][2]) / union_size if union_size else 0
+                if jaccard >= PLAUSIBLE_DEDUP_JACCARD_THRESHOLD:
+                    cluster.append(j)
+                    merged[j] = True
+            if len(cluster) > 1:
+                for k in cluster:
+                    grouped_plausible_eids.add(group[k][0])
+                best_idx = max(cluster, key=lambda k: float(group[k][1].confidence))
+                best_eid, best_edge, best_pids = group[best_idx]
+                max_conf = max(float(group[k][1].confidence) for k in cluster)
+                premises_list = [pid for pid in best_edge.premise_ids if pid in fg.variables]
+                if not premises_list:
+                    continue
+                p2 = _derive_p2_soft_entailment(best_edge)
+                p1 = _effective_p1_from_raw(max_conf, p2, edge_id=best_eid)
+                dedup_eid = f"{best_eid}_dedup"
+                if len(premises_list) == 1:
+                    try:
+                        fg.add_factor(
+                            dedup_eid,
+                            FactorType.SOFT_ENTAILMENT,
+                            premises_list,
+                            conclusion_id,
+                            p1=p1,
+                            p2=p2,
+                        )
+                    except ValueError as exc:
+                        logger.warning("Skipping deduplicated SOFT_ENTAILMENT %s: %s", dedup_eid, exc)
+                    continue
+                mediator = f"{dedup_eid}_M"
+                if mediator not in fg.variables:
+                    fg.add_variable(mediator, 0.5)
+                synthetic_var_ids.add(mediator)
+                try:
+                    fg.add_factor(
+                        f"{dedup_eid}_conj",
+                        FactorType.CONJUNCTION,
+                        premises_list,
+                        mediator,
+                    )
+                    fg.add_factor(
+                        dedup_eid,
+                        FactorType.SOFT_ENTAILMENT,
+                        [mediator],
+                        conclusion_id,
+                        p1=p1,
+                        p2=p2,
+                    )
+                except ValueError as exc:
+                    logger.warning("Skipping deduplicated multi-premise factor %s: %s", dedup_eid, exc)
 
     for eid, edge in graph.edges.items():
         if eid in grouped_plausible_eids:
