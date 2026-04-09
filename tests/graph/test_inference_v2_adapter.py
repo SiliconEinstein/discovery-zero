@@ -20,12 +20,13 @@ def test_adapter_v2_maps_heuristic_formal_and_includes_decomposition():
     adapted = adapt_zero_graph_v2(graph)
     factor_types = [f.factor_type for f in adapted.factor_graph.factors]
 
-    assert factor_types.count(FactorType.SOFT_ENTAILMENT) == 1
-    assert factor_types.count(FactorType.IMPLICATION) == 2
+    assert factor_types.count(FactorType.SOFT_ENTAILMENT) == 2  # heuristic + decomposition
+    assert factor_types.count(FactorType.IMPLICATION) == 1  # formal only
     assert all(f.factor_type != FactorType.CONJUNCTION for f in adapted.factor_graph.factors)
 
 
-def test_decomposition_uses_deterministic_conjunction_then_implication():
+def test_decomposition_maps_to_soft_entailment():
+    """Decomposition is heuristic planning, not formal verification → SOFT_ENTAILMENT."""
     graph = HyperGraph()
     a = graph.add_node("A", belief=0.05, prior=0.05)
     b = graph.add_node("B", belief=0.05, prior=0.05)
@@ -41,10 +42,8 @@ def test_decomposition_uses_deterministic_conjunction_then_implication():
     adapted = adapt_zero_graph_v2(graph)
     se_factors = [f for f in adapted.factor_graph.factors if f.factor_type == FactorType.SOFT_ENTAILMENT]
     imp_factors = [f for f in adapted.factor_graph.factors if f.factor_type == FactorType.IMPLICATION]
-    conj_factors = [f for f in adapted.factor_graph.factors if f.factor_type == FactorType.CONJUNCTION]
-    assert not se_factors
-    assert len(imp_factors) == 1
-    assert len(conj_factors) == 1
+    assert len(se_factors) >= 1
+    assert not imp_factors
 
 
 def test_adapter_v2_creates_helper_claims_for_constraints():
@@ -100,13 +99,26 @@ def test_experiment_edges_use_noisy_and_p2():
     assert se[0].p2 == pytest.approx(1.0 - CROMWELL_EPS, abs=1e-9)
 
 
-def test_plausible_same_conclusion_edges_are_deduplicated():
+def test_independent_plausible_edges_stay_separate():
+    """Edges with disjoint premise sets are independent evidence — not merged."""
     graph = HyperGraph()
     a = graph.add_node("A", belief=0.8, prior=0.8)
     b = graph.add_node("B", belief=0.75, prior=0.75)
     c = graph.add_node("C", belief=0.5, prior=0.5)
     graph.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["a->c"], confidence=0.9, edge_type="heuristic")
     graph.add_hyperedge([b.id], c.id, Module.PLAUSIBLE, ["b->c"], confidence=0.7, edge_type="heuristic")
+    adapted = adapt_zero_graph_v2(graph)
+    se = [f for f in adapted.factor_graph.factors if f.factor_type == FactorType.SOFT_ENTAILMENT]
+    assert len(se) == 2
+
+
+def test_identical_premise_plausible_edges_are_deduplicated():
+    """Edges with identical premise sets (Jaccard=1) are merged, taking max confidence."""
+    graph = HyperGraph()
+    a = graph.add_node("A", belief=0.8, prior=0.8)
+    c = graph.add_node("C", belief=0.5, prior=0.5)
+    graph.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["first"], confidence=0.7, edge_type="heuristic")
+    graph.add_hyperedge([a.id], c.id, Module.PLAUSIBLE, ["second"], confidence=0.9, edge_type="heuristic")
     adapted = adapt_zero_graph_v2(graph)
     se = [f for f in adapted.factor_graph.factors if f.factor_type == FactorType.SOFT_ENTAILMENT]
     assert len(se) == 1
