@@ -1046,15 +1046,20 @@ _JUDGE_FALLBACK: dict[str, Any] = {
 def run_judge(output: dict[str, Any], model: Optional[str] = None) -> dict[str, Any]:
     """Run the judge skill on a normalized output dict.
 
+    Uses an independent reviewer model (CONFIG.judge_model) when available,
+    ensuring construction/verification separation per Gaia theory (§4.3).
+    Falls back to the caller-supplied model when no dedicated judge is configured.
+
     Returns a conservative fallback when the judge LLM produces
     unparseable output, so that a single malformed response never
     crashes the entire run.
     """
+    judge_model = getattr(CONFIG, "judge_model", "") or model
     try:
         _, parsed = run_skill(
             "judge.skill.md",
             "Hyperedge to evaluate:\n" + json.dumps(output, ensure_ascii=False, indent=2),
-            model=model,
+            model=judge_model,
         )
         if not isinstance(parsed, dict) or "confidence" not in parsed:
             return dict(_JUDGE_FALLBACK)
