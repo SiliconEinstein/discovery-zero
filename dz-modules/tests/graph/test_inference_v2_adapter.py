@@ -68,7 +68,8 @@ def test_equivalence_relation_variable_prior_is_near_true():
         assert fg.variables[vid] == pytest.approx(1.0 - CROMWELL_EPS, abs=1e-9)
 
 
-def test_decomposition_is_deterministic_factorization():
+def test_decomposition_is_soft_entailment():
+    """Decomposition is heuristic planning, not formal verification → SOFT_ENTAILMENT."""
     graph = HyperGraph()
     a = graph.add_node("A", belief=0.05, prior=0.05)
     b = graph.add_node("B", belief=0.05, prior=0.05)
@@ -83,7 +84,5 @@ def test_decomposition_is_deterministic_factorization():
     )
     se_factors = [f for f in fg.factors if f.factor_type == FactorType.SOFT_ENTAILMENT]
     imp_factors = [f for f in fg.factors if f.factor_type == FactorType.IMPLICATION]
-    conj_factors = [f for f in fg.factors if f.factor_type == FactorType.CONJUNCTION]
-    assert not se_factors
-    assert len(imp_factors) >= 1
-    assert len(conj_factors) >= 1
+    assert len(se_factors) >= 1
+    assert not imp_factors
